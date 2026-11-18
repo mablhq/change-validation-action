@@ -1,2 +1,191 @@
-# change-validation-action
-GitHub Action and reusable workflows for mabl change validation agent
+# mabl change validation
+
+Validate every pull request, merge queue entry and deployment with mabl, from GitHub Actions.
+
+A policy file in your repository, `.mabl/policy.yaml`, lists the checks for each stage of your workflow: suites
+of mabl tests you always run, such as a smoke suite, and the tests the change impacts, which mabl finds with
+test impact analysis. When your workflow reaches a stage, this action asks mabl to validate it. mabl runs the
+stage's checks against the environment you name and reports a status for each one, so your workflow can let
+the change through or hold it back.
+
+You decide which checks must pass. A check starts as a warning; set `must_pass: true` when you're ready for it to
+block.
+
+> Change validation is in early access for mabl accounts with generative AI features. Pricing and packaging are
+> subject to change.
+
+To analyze a change, the action sends mabl your policy file; the repository, branch and commits; the pull
+request's title, description (the first 8,000 characters, unless you pass your own `change-description`) and
+labels; the names of the changed files, grouped by application; and the diff totals. For a deployed commit it sends
+the titles of the pull requests merged since the base commit, and a comment command is sent as typed. It never
+sends the contents of the files your change touches. Don't put secrets in a pull request's description.
+
+## Before you start
+
+- A mabl workspace with generative AI features.
+- A mabl API key of the **Command Line Interface** or **Editor** type, stored as an encrypted secret, for example
+  `MABL_API_KEY`. See [managing API keys](https://help.mabl.com/hc/en-us/articles/17776006239764).
+- Your mabl workspace's ID, which every call names. Workspace IDs aren't secret.
+- A `.mabl/policy.yaml` that names your mabl application, environment and plans, and the stages your workflow
+  asks for. Start from [examples/policy.yaml](examples/policy.yaml).
+
+## Quickstart
+
+1. **Add the policy file.** Copy [examples/policy.yaml](examples/policy.yaml) to `.mabl/policy.yaml`, fill in
+   the IDs from your workspace, and check it with the mabl CLI (`npm install -g @mablhq/mabl-cli`):
+
+   ```sh
+   mabl policy resolve --file .mabl/policy.yaml
+   ```
+
+   Merge it first: mabl reads the policy from the branch a pull request targets, so a pull request can't change
+   the rules it's checked against.
+
+2. **Validate each pull request.** Add [examples/pull-request.yml](examples/pull-request.yml) as a workflow:
+
+   ```yaml
+   on:
+     pull_request:
+       types: [opened, synchronize, reopened, edited]
+     issue_comment:
+       types: [created]
+   jobs:
+     mabl:
+       permissions:
+         contents: read
+         pull-requests: read
+       uses: mablhq/change-validation-action/.github/workflows/pull-request.yml@v1
+       with:
+         stage: pull_request
+         workspace-id: your-workspace-id
+       secrets:
+         mabl-api-key: ${{ secrets.MABL_API_KEY }}
+   ```
+
+3. **Gate the merge queue (optional).** Add [examples/merge-queue-after-preview.yml](examples/merge-queue-after-preview.yml)
+   after the job that deploys the queue's commit, and require its status context in your branch rules.
+
+For a stage that runs after a merge deploys, such as to a shared staging environment, see
+[examples/revision-after-deploy.yml](examples/revision-after-deploy.yml). To check the policy file on the pull
+requests that change it, see [examples/policy-check.yml](examples/policy-check.yml).
+
+## Deployed commits
+
+Most pipelines call the action from their deploy job, or from a `workflow_run` that follows it. These events send
+a deployed commit, for the policy's `scope: revision` stages:
+
+| Event | Commit validated | `base-sha` |
+|---|---|---|
+| `push` to a branch | The pushed commit | Defaults to the push's previous commit; required for a new branch |
+| `push` of a tag | The tagged commit | Required, for example the previous tag's commit |
+| `deployment_status` | The deployment's commit | Required |
+| `workflow_run` | The commit the triggering run ran on | Required |
+| `workflow_dispatch`, `release`, `schedule` | The run's commit | Required |
+
+`head-sha` overrides the commit. Except for the commit a branch push just pushed, it must be on the default branch,
+or the action refuses it. `base-sha` is the commit the environment ran before, which the change is measured from.
+
+## What's here
+
+| Use | For |
+|---|---|
+| `mablhq/change-validation-action@v1` | The action: send one stage request, and with `await`, wait for the stage's status and publish it as a commit status |
+| `mablhq/change-validation-action/policy@v1` | Check a policy file at a commit and show what changes from another |
+| `.github/workflows/pull-request.yml` | Reusable: pull request stages, plus a `/mabl` comment that sends the current head again |
+| `.github/workflows/merge-queue.yml` | Reusable: a merge queue stage, awaited and published as a commit status |
+| `.github/workflows/revision.yml` | Reusable: a stage for a deployed commit (`scope: revision` in the policy) |
+| `.github/workflows/policy-check.yml` | Reusable: the policy check on pull requests |
+
+## The action's inputs
+
+| Input | Default | |
+|---|---|---|
+| `mabl-api-key` | required | A Command Line Interface or Editor key. The first stage request for a pull request decides which key mabl acts as for it |
+| `stage` | | The policy stage to validate, by the name your policy gives it |
+| `workspace-id` | required | The ID of the mabl workspace to validate in |
+| `dry-run` | `false` | `true` reports what would run without starting a test run |
+| `file` | `.mabl/policy.yaml` | The policy file's path |
+| `await` | `false` | On `merge_group` and deployed commits: wait for the stage's status and publish it |
+| `status-context` | | With `await`, the commit status context to publish |
+| `deadline-minutes` | `40` | With `await`, how long to wait before publishing failure, 1 to 120. Set the job's `timeout-minutes` to at least this + 5 |
+| `change-description` | built from the pull request | What the change does, in product terms, written by any earlier step. When empty, the action builds one from the pull request's title, body, changed paths per application and diff totals |
+| `change-description-head-sha` | | The head `change-description` was written for; required with it |
+| `head-sha`, `base-sha` | the event's | For a deployed commit: the commit, and the one the environment ran before |
+| `command` | | On `issue_comment`, the text after your trigger word, sent to the pull request's mabl agent |
+| `comment` | `false` | `true` keeps one comment on the pull request with mabl's report. See [The pull request comment](#the-pull-request-comment) |
+| `comment-wait-minutes` | `15` | With `comment`, how long after a pull request stage request to keep the comment current |
+| `api-url` | `https://api.mabl.com` | The mabl api; no other is accepted |
+| `token` | `github.token` | Reads the pull request and the policy file; with `await`, needs `statuses: write`; with `comment`, `pull-requests: write` |
+
+Outputs: `outcome` (`accepted`, `duplicate` or `superseded` when sent), `session-id`, `created`, `agent`,
+`description-source` (`built` or `provided`), and with `await`, `status` (`success` or `failure`).
+
+If change validation is off for the workspace, mabl answers `feature_disabled`: the step passes with a notice and
+nothing is validated. With `await`, the commit status is `failure`, so a gate can't pass on a stage nobody judged.
+
+## The pull request comment
+
+With `comment: true`, the action keeps one comment on the pull request with mabl's report of the change: for
+each application, the impacted tests (kept or left out, and why), the numbered coverage gaps, and how each
+stage's checks are going. It posts the markdown mabl renders, as is.
+
+- **On a pull request stage request** mabl took (`accepted` or `duplicate`), it keeps the comment current for up
+  to `comment-wait-minutes`, reading the report every 20 seconds until each application the change reaches has its
+  analysis. Give the job `pull-requests: write` and a `timeout-minutes` of at least `comment-wait-minutes` + 5.
+- **On an awaited merge queue entry**, it updates the comment once, after the status is published.
+- **Never on** comment commands, deployed commits, or a request mabl didn't take.
+
+The comment can't change the request's outcome, outputs or commit status: a failed report read or post is a log
+line or one warning, never a failed step. It updates the oldest comment the same token wrote for the same mabl
+agent, found by the marker on its first line, and never edits anyone else's. Nothing is deleted. Give
+`pull_request` runs a concurrency group per pull request, as the reusable workflow does, so overlapping runs don't
+leave a duplicate.
+
+A tool that reads the comment should read its hidden data line (`<!-- mabl-change-validation-data {json} -->`), not
+the prose.
+
+### Before turning it on in a public repository
+
+- **Anyone can read the comment**, including your mabl test names and the coverage gaps it lists.
+- **A maintainer can edit any comment**, the data line included. Treat what the comment says as a summary, and
+  read the status from mabl, as the action does, for anything that gates a merge.
+- **Only people with write access should start a run that costs credits.** The reusable workflow takes comment
+  commands only from owners, members and collaborators, and the action then checks the commenter has write access;
+  keep the first check if you call the action yourself.
+
+## Good to know
+
+- **Each pull request gets one mabl agent**, started by its first stage request. It analyzes each head it's sent,
+  runs the stage's checks in one deployment event per application, and reports. Fixed rules decide whether a
+  check passed; the agent never does.
+- **Nothing to run is a pass**, but only when the analysis succeeded. A stage mabl can't judge, such as one with
+  a missing or invalid policy file, never passes.
+- **Forks.** Pull requests from forks get no secrets, so the reusable workflows skip them. If you call the action
+  yourself, skip them too.
+- **The policy is read at a commit the pull request's author can't change:** the pull request's base, or the
+  merge group's base. Put `.mabl/policy.yaml` under CODEOWNERS.
+- **Outputs are untrusted.** Values from a pull request reach the outputs. Read them through `env:`, never inside
+  a `run:` script.
+- **A `Mabl branch: <name>` line** in the pull request's description names the mabl branch its tests live on. A
+  stage whose policy sets `mabl_branch: match-pr` runs that branch's tests while it's open; other stages ignore it.
+- **Merged pull requests.** Run the action on `pull_request` with `types: [closed]` to tell mabl a pull request
+  merged; with `merge_mabl_branches: true` in the policy, mabl then merges the pull request's mabl branch into
+  master. A pull request closed without merging sends nothing.
+- **Comment commands.** On `issue_comment`, the reusable workflow passes the first line after its trigger word
+  (`/mabl` by default) to the pull request's mabl agent as is; the word alone sends the current head again.
+- **Awaiting a deployed commit.** Two runs for the same commit and `status-context` can overlap, and the later
+  write wins. The reusable `revision.yml` makes them take turns; if you call the action directly, give those runs a
+  shared `concurrency` group with `cancel-in-progress: false`.
+- **Pinning.** The reusable workflows call this action at `@v1`, so a workflow pinned to a commit still runs the
+  action `v1` points to. To pin everything, call the action itself at a commit.
+
+## Learn more
+
+- [How test impact analysis works](https://help.mabl.com/hc/en-us/articles/53552823585044)
+- [Test impact analysis in CI/CD](https://help.mabl.com/hc/en-us/articles/53454030677140)
+
+Questions: support@mabl.com
+
+## License
+
+[MIT](LICENSE)

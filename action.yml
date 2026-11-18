@@ -1,0 +1,89 @@
+name: mabl change validation
+description: Ask mabl to validate a stage of your repository's policy for a pull request or a deployed commit, and optionally wait for the stage's status
+author: mabl
+branding:
+  icon: check-circle
+  color: green
+inputs:
+  mabl-api-key:
+    description: "A mabl API key of the Command Line Interface or Editor type. The first stage request for a pull request decides which key mabl acts as for it"
+    required: true
+  workspace-id:
+    description: "The id of the mabl workspace to validate in"
+    required: true
+  stage:
+    description: "The policy stage to validate, by the name your policy gives it (for example pull_request on pull_request events, merge_queue on merge_group, and a scope revision stage such as staging after a deploy); required unless sending a command"
+    required: false
+    default: ''
+  api-url:
+    description: "The mabl api to send requests to; https://api.mabl.com is the only one accepted"
+    required: false
+    default: 'https://api.mabl.com'
+  command:
+    description: "On issue_comment, the comment's text after your trigger word; ignored on pull_request"
+    required: false
+    default: ''
+  change-description:
+    description: "On a stage request, what the change does in product terms (for example written by an earlier step); when empty the action builds one from the pull request's title, body, changed paths per application and diff totals"
+    required: false
+    default: ''
+  change-description-head-sha:
+    description: 'The head commit change-description was written for; required with it. If the pull request has moved on, nothing is sent'
+    required: false
+    default: ''
+  head-sha:
+    description: "On a deployed commit, the commit; when empty, a deployment_status event's sha or a workflow_run's head_sha, else the run's GITHUB_SHA. It must be on the default branch, unless a branch push just pushed it. Ignored on pull_request, issue_comment and merge_group"
+    required: false
+    default: ''
+  base-sha:
+    description: "On a deployed commit, the commit the environment ran before head-sha, which the change is measured from (for example the last release's commit). Required, except on a branch push, where it defaults to the push's previous commit. Ignored on pull_request, issue_comment and merge_group"
+    required: false
+    default: ''
+  dry-run:
+    description: "'true' to run this stage request dry: mabl reports what would run and never starts a test run"
+    required: false
+    default: 'false'
+  file:
+    description: "The policy file's path in the repository"
+    required: false
+    default: '.mabl/policy.yaml'
+  await:
+    description: "'true' on merge_group events and deployed commits only: wait for the stage's status after the request and publish it as the commit status status-context, pending while waiting, then success or failure"
+    required: false
+    default: 'false'
+  status-context:
+    description: 'The commit status context await mode publishes; required with await'
+    required: false
+    default: ''
+  deadline-minutes:
+    description: "With await, how long after the stage request to wait before publishing failure, 1 to 120. Set the job's timeout-minutes to at least deadline-minutes + 5"
+    required: false
+    default: '40'
+  comment:
+    description: "'true' to keep one comment on the pull request with mabl's report of the change, which can't change the request's outcome, outputs or status: kept current while the analyses run after a pull_request stage request, and updated once after an awaited merge queue entry's status is published"
+    required: false
+    default: 'false'
+  comment-wait-minutes:
+    description: "With comment, how long after a pull_request stage request to keep the comment current; set the job's timeout-minutes to at least this + 5"
+    required: false
+    default: '15'
+  token:
+    description: 'A token that can read the pull request and the repository contents; with await, publish commit statuses (statuses: write); with comment, comment on the pull request (pull-requests: write)'
+    required: false
+    default: ${{ github.token }}
+outputs:
+  outcome:
+    description: "accepted, duplicate or superseded when sent; skipped, entry_gone (a merge queue build the queue dropped), refused, feature_disabled, change_agent_closed (validation was turned off for this pull request), another error code, or failed otherwise; with await, also timed_out when the time ran out just before sending"
+  session-id:
+    description: "The mabl agent session for the pull request or commit; empty unless sent"
+  created:
+    description: "'true' when this request started the mabl agent"
+  agent:
+    description: 'working or queued; empty when nothing was woken'
+  description-source:
+    description: "built when the action wrote the change description, provided when it sent change-description; empty for a command and when the run stopped before sending"
+  status:
+    description: "With await, the state published as status-context: success or failure; empty when nothing was published or without await"
+runs:
+  using: node24
+  main: src/main.mjs

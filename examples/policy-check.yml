@@ -1,0 +1,14 @@
+# .github/workflows/mabl-policy-check.yml
+# Checks the policy file on any pull request that changes it.
+name: mabl policy check
+on:
+  pull_request:
+    paths: ['.mabl/**']
+
+jobs:
+  mabl-policy:
+    permissions:
+      contents: read
+    uses: mablhq/change-validation-action/.github/workflows/policy-check.yml@v1
+    secrets:
+      mabl-api-key: ${{ secrets.MABL_API_KEY }}

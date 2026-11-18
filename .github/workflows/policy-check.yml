@@ -1,0 +1,32 @@
+name: mabl policy check
+
+# Checks the policy file on a pull request that changes it: the mabl api reports any error at its line, and the
+# job summary shows each setting that changes from the base. Call it on pull_request with a paths filter on the
+# policy file. The calling job grants: contents: read.
+
+on:
+  workflow_call:
+    inputs:
+      file:
+        description: The policy file's path in the repository
+        type: string
+        default: .mabl/policy.yaml
+    secrets:
+      mabl-api-key:
+        description: A mabl API key of the Command Line Interface or Editor type
+        required: true
+
+jobs:
+  check:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: mablhq/change-validation-action/policy@v1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          compare-ref: ${{ github.event.pull_request.base.sha }}
+          file: ${{ inputs.file }}
+          mabl-api-key: ${{ secrets.mabl-api-key }}
