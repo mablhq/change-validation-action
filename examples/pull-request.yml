@@ -1,0 +1,24 @@
+# .github/workflows/mabl-pull-request.yml
+# Asks mabl to validate each pull request, and lets anyone with write access comment `/mabl` to send the
+# current head again.
+name: mabl pull request
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  issue_comment:
+    types: [created]
+
+jobs:
+  mabl:
+    permissions:
+      contents: read
+      pull-requests: read # write, to turn on the comment below
+    uses: mablhq/change-validation-action/.github/workflows/pull-request.yml@v1
+    with:
+      stage: pull_request
+      workspace-id: your-workspace-id
+      # Keep one comment on the pull request with mabl's report. Read the README before turning it on in a
+      # public repository.
+      # comment: true
+    secrets:
+      mabl-api-key: ${{ secrets.MABL_API_KEY }}

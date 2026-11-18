@@ -1,0 +1,37 @@
+name: mabl policy check
+description: Read a repository's mabl policy file at a commit and have the mabl api check it and resolve its stages
+inputs:
+  ref:
+    description: 'The full 40-character commit sha to read the policy at'
+    required: true
+  compare-ref:
+    description: "The full 40-character commit sha to compare the policy with, such as the PR's base; empty compares nothing, and one that can't be read only warns"
+    required: false
+    default: ''
+  file:
+    description: "The policy file's path in the repository"
+    required: false
+    default: '.mabl/policy.yaml'
+  repository:
+    description: 'owner/name of the repository to read'
+    required: false
+    default: ${{ github.repository }}
+  token:
+    description: 'A token that can read the repository contents'
+    required: false
+    default: ${{ github.token }}
+  mabl-api-key:
+    description: 'A mabl API key of the Command Line Interface or Editor type'
+    required: true
+outputs:
+  found:
+    description: "'true' when the file exists at ref, 'false' when it doesn't; empty when it couldn't be read or resolved"
+  digest:
+    description: 'sha256 of the resolved stages; empty unless the file is valid'
+  policy:
+    description: 'The file with every default filled in, as JSON; {} unless the file is valid'
+  stages:
+    description: 'The resolved stages per application, as JSON; {} unless the file is valid'
+runs:
+  using: node24
+  main: main.mjs

@@ -1,0 +1,32 @@
+# .github/workflows/mabl-merge-queue.yml
+# Deploys each merge queue entry to a preview, then asks mabl to validate the merge_queue stage against it and
+# publishes the result as the commit status `mabl-merge-queue`. Require that context in your branch rules.
+name: mabl merge queue
+on:
+  merge_group:
+
+jobs:
+  deploy-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          SHA: ${{ github.event.merge_group.head_sha }}
+        run: echo "Deploy ${SHA} to its preview here"
+
+  mabl:
+    needs: deploy-preview
+    permissions:
+      contents: read
+      pull-requests: read # write, to turn on the comment below
+      statuses: write
+    uses: mablhq/change-validation-action/.github/workflows/merge-queue.yml@v1
+    with:
+      stage: merge_queue
+      workspace-id: your-workspace-id
+      status-context: mabl-merge-queue
+      deadline-minutes: 40
+      timeout-minutes: 45
+      # Update the pull request's comment with mabl's report once the status is published.
+      # comment: true
+    secrets:
+      mabl-api-key: ${{ secrets.MABL_API_KEY }}

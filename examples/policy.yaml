@@ -1,0 +1,45 @@
+# .mabl/policy.yaml: which mabl tests a change must pass, per application and stage.
+# Replace each value in square brackets with the ID from your workspace, then check the file with
+# `mabl policy resolve --file .mabl/policy.yaml`.
+version: 1
+
+suites:
+  smoke:
+    plan_labels: [smoke]
+  regression:
+    plan_labels: [regression]
+
+impacted:
+  include:
+    suites: [smoke, regression]
+  exclude:
+    test_labels: [quarantine]
+  # Tests with these labels run without mabl first reading their steps for anything that writes data.
+  trusted:
+    test_labels: [safe-to-run]
+  # An impacted test logs in with the credentials of its plan in one of these suites, else the target's.
+  logins_from: [smoke, regression]
+
+applications:
+  web:
+    mabl_application: '[application-id]'
+    target:
+      # Leave url out to run at the environment's own URL, such as a shared staging environment.
+      url: 'https://pr-{sha7}.preview.example.com'
+      environment: '[environment-id]'
+      credentials: '[credentials-id]'
+    stages:
+      # Each pull request: the impacted tests, reported without blocking.
+      pull_request:
+        checks:
+          - kind: impacted
+      # Each merge queue entry: the smoke suite and the impacted tests must pass.
+      merge_queue:
+        checks:
+          - kind: suite
+            suite: smoke
+            must_pass: true
+          - kind: impacted
+            must_pass: true
+            # A pull request with this label gets through without this check.
+            waiver: {label: skip-impacted-tests}

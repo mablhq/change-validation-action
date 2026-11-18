@@ -1,0 +1,109 @@
+name: mabl change validation (pull request)
+
+# Asks mabl to validate a pull request stage when a pull request opens or gets a new commit, and when someone
+# with write access comments the trigger word on it: the word alone sends the current head, and anything after
+# it is sent to the pull request's mabl agent as a command.
+#
+# With `comment: true` it also keeps one comment on the pull request with mabl's report of the change, for up to
+# comment-wait-minutes after the stage request.
+#
+# The calling job grants: contents: read, pull-requests: read, or pull-requests: write with `comment: true`. Call
+# it on pull_request (opened, synchronize, reopened, and edited for a base branch change) and, for comment
+# commands, issue_comment (created).
+
+on:
+  workflow_call:
+    inputs:
+      stage:
+        description: The policy stage to validate
+        type: string
+        default: pull_request
+      dry-run:
+        description: Report what would run without starting any test run
+        type: boolean
+        default: false
+      file:
+        description: The policy file's path in the repository
+        type: string
+        default: .mabl/policy.yaml
+      workspace-id:
+        description: The id of the mabl workspace to validate in
+        type: string
+        required: true
+      api-url:
+        description: The mabl api; https://api.mabl.com is the only one accepted
+        type: string
+        default: https://api.mabl.com
+      trigger-word:
+        description: The comment word that sends the current head, or a command after it
+        type: string
+        default: /mabl
+      comment:
+        description: Keep one comment on the pull request with mabl's report of the change; needs pull-requests write
+        type: boolean
+        default: false
+      comment-wait-minutes:
+        description: With comment, how long after the stage request to keep the comment current
+        type: number
+        default: 15
+      timeout-minutes:
+        description: The job's timeout; with comment, keep it at least comment-wait-minutes + 5
+        type: number
+        default: 20
+    secrets:
+      mabl-api-key:
+        description: A mabl API key of the Command Line Interface or Editor type
+        required: true
+    outputs:
+      outcome:
+        description: accepted, duplicate or superseded when sent; otherwise why not
+        value: ${{ jobs.stage-request.outputs.outcome }}
+      session-id:
+        description: The pull request's mabl agent session
+        value: ${{ jobs.stage-request.outputs.session-id }}
+
+jobs:
+  stage-request:
+    # Fork pull requests get no secrets, and Dependabot's get only Dependabot secrets.
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.actor != 'dependabot[bot]') ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       (github.event.comment.body == inputs.trigger-word ||
+        startsWith(github.event.comment.body, format('{0} ', inputs.trigger-word))) &&
+       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+    # pull_request runs share one group per pull request and stage, so a newer push replaces the older run's
+    # wait for the comment; every other run gets its own, so a comment command can't cancel a pending push's run.
+    concurrency:
+      group: ${{ github.event_name == 'pull_request' && format('mabl-change-validation-{0}-pr-{1}', inputs.stage, github.event.pull_request.number) || format('mabl-change-validation-run-{0}', github.run_id) }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      outcome: ${{ steps.send.outputs.outcome }}
+      session-id: ${{ steps.send.outputs.session-id }}
+    steps:
+      # The comment's first line after the trigger word; empty for the word alone.
+      - id: command
+        if: github.event_name == 'issue_comment'
+        shell: bash
+        env:
+          BODY: ${{ github.event.comment.body }}
+          TRIGGER: ${{ inputs.trigger-word }}
+        run: |
+          first=$(printf '%s\n' "$BODY" | head -n 1 | tr -d '\r')
+          printf 'text=%s\n' "${first#"$TRIGGER"}" >> "$GITHUB_OUTPUT"
+      - id: send
+        uses: mablhq/change-validation-action@v1
+        with:
+          mabl-api-key: ${{ secrets.mabl-api-key }}
+          workspace-id: ${{ inputs.workspace-id }}
+          api-url: ${{ inputs.api-url }}
+          stage: ${{ inputs.stage }}
+          command: ${{ steps.command.outputs.text }}
+          dry-run: ${{ inputs.dry-run }}
+          file: ${{ inputs.file }}
+          comment: ${{ inputs.comment }}
+          comment-wait-minutes: ${{ inputs.comment-wait-minutes }}

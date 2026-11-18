@@ -1,0 +1,23 @@
+{
+  "name": "change-validation-action",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GitHub Action and reusable workflows for mabl change validation",
+  "license": "MIT",
+  "author": "mabl",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mablhq/change-validation-action.git"
+  },
+  "bugs": {
+    "email": "support@mabl.com"
+  },
+  "homepage": "https://github.com/mablhq/change-validation-action#readme",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

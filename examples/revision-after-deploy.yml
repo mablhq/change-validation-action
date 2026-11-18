@@ -1,0 +1,39 @@
+# .github/workflows/mabl-staging.yml
+# After a merge deploys to a shared staging environment, asks mabl to validate the deployed commit's `staging`
+# stage and publishes the result as `mabl-staging`, which a promotion to production can require. The stage
+# needs `scope: revision` in your policy file, for example:
+#
+#   stages:
+#     staging:
+#       scope: revision
+#       checks:
+#         - kind: suite
+#           suite: smoke
+#         - kind: impacted
+name: mabl staging
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          SHA: ${{ github.sha }}
+        run: echo "Deploy ${SHA} to staging here"
+
+  mabl:
+    needs: deploy-staging
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    uses: mablhq/change-validation-action/.github/workflows/revision.yml@v1
+    with:
+      stage: staging
+      workspace-id: your-workspace-id
+      await: true
+      status-context: mabl-staging
+    secrets:
+      mabl-api-key: ${{ secrets.MABL_API_KEY }}
