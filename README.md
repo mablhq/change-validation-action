@@ -49,8 +49,6 @@ sends the contents of the files your change touches. Don't put secrets in a pull
    on:
      pull_request:
        types: [opened, synchronize, reopened, edited]
-     issue_comment:
-       types: [created]
    jobs:
      mabl:
        permissions:
@@ -107,7 +105,7 @@ or the action refuses it. `base-sha` is the commit the environment ran before, w
 |---|---|
 | `mablhq/change-validation-action@v1` | The action: send one stage request, and with `await`, wait for the stage's status and publish it as a commit status |
 | `mablhq/change-validation-action/policy@v1` | Check a policy file at a commit and show what changes from another. See [policy/README.md](policy/README.md) |
-| `.github/workflows/pull-request.yml` | Reusable: pull request stages, plus a `/mabl` comment that sends the current head again |
+| `.github/workflows/pull-request.yml` | Reusable: pull request stages, and [comment commands](#comment-commands) if you add the trigger |
 | `.github/workflows/merge-queue.yml` | Reusable: a merge queue stage, awaited and published as a commit status |
 | `.github/workflows/deployed-commit.yml` | Reusable: a stage for a deployed commit (`scope: revision` in the policy). `revision.yml`, its earlier name, still works |
 | `.github/workflows/policy-check.yml` | Reusable: the policy check on pull requests |
@@ -127,7 +125,7 @@ or the action refuses it. `base-sha` is the commit the environment ran before, w
 | `change-description` | built from the pull request | What the change does, in product terms, written by any earlier step. When empty, the action builds one from the pull request's title, body, changed paths per application and diff totals |
 | `change-description-head-sha` | | The head `change-description` was written for; required with it |
 | `head-sha`, `base-sha` | the event's | For a deployed commit: the commit, and the one the environment ran before |
-| `trigger-word` | | On `issue_comment`, the word a comment must start with, such as `/mabl`. See [comment commands](#good-to-know) |
+| `trigger-word` | | On `issue_comment`, the word a comment must start with, such as `/mabl`. See [Comment commands](#comment-commands) |
 | `command` | | On `issue_comment` without `trigger-word`, the text after your own trigger word, sent to the pull request's mabl agent |
 | `comment` | `false` | `true` keeps one comment on the pull request with mabl's report. See [The pull request comment](#the-pull-request-comment) |
 | `comment-wait-minutes` | `15` | With `comment`, how long after a pull request stage request to keep the comment current |
@@ -176,6 +174,28 @@ the prose.
   commands only from owners, members and collaborators, and the action then checks the commenter has write access;
   keep the first check if you call the action yourself.
 
+## Comment commands
+
+Optional, and off until you add the trigger. To let people with write access reach a pull request's mabl agent
+from a comment, add `issue_comment` to the workflow that calls `pull-request.yml`:
+
+```yaml
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  issue_comment:
+    types: [created]
+```
+
+- A comment of `/mabl` alone sends the pull request's current head again. Anything after the word, on the
+  comment's first line, goes to the pull request's mabl agent as is. The workflow's `trigger-word` input changes
+  the word.
+- Any other comment is skipped. GitHub still lists a skipped run for every comment on an issue or pull request,
+  which is why the trigger isn't in the quickstart.
+- Comments are taken only from owners, members and collaborators who have write access.
+- If you call the action yourself, set its `trigger-word`, and keep an `if:` on the job, as the reusable workflow
+  does, so other comments don't start a runner.
+
 ## Good to know
 
 - **Each pull request gets one mabl agent**, started by its first stage request. It analyzes each head it's sent,
@@ -200,10 +220,6 @@ the prose.
   merged, as [examples/pull-request-merged.yml](examples/pull-request-merged.yml) does; with
   `merge_mabl_branches: true` in the policy, mabl then merges the pull request's mabl branch into master. A pull
   request closed without merging sends nothing.
-- **Comment commands.** On `issue_comment` with `trigger-word` set (the reusable workflow's is `/mabl`), the rest
-  of the comment's first line goes to the pull request's mabl agent as is. The word alone sends the current head
-  again, and any other comment is skipped. If you call the action yourself, also keep an `if:` on the job, as the
-  reusable workflow does, so other comments don't start a runner.
 - **Awaiting a deployed commit.** Two runs for the same commit and `status-context` can overlap, and the later
   write wins. The reusable `deployed-commit.yml` makes them take turns; if you call the action directly, give those runs a
   shared `concurrency` group with `cancel-in-progress: false`.

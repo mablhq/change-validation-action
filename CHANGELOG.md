@@ -9,6 +9,8 @@
   merge queue entries, deployed commits and merged pull requests.
 - `trigger-word`: on `issue_comment`, the action reads the command from the comment itself and skips a comment
   that doesn't start with the word. The reusable pull request workflow passes its `trigger-word` through.
+- The quickstart and `examples/pull-request.yml` no longer subscribe to `issue_comment`. Comment commands are
+  optional, with their own README section.
 - With `await`, a run that stops on an input it can't use, or on an error it didn't expect, publishes `error` on
   the status context, and `status` is `error`. The reusable workflows no longer carry their own step for this.
 - The reusable workflow for deployed commits is now `deployed-commit.yml`. `revision.yml` still works and calls it.
