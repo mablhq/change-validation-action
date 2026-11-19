@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.1
 
 - Docs: the full policy file reference (`docs/policy-file.md`), a README for the policy check, and example policies
   for a shared staging environment, a repository with more than one application, and mabl branches. The README
@@ -15,6 +15,9 @@
   the status context, and `status` is `error`. The reusable workflows keep their own step for a run that died
   before it could.
 - The reusable workflow for deployed commits is now `deployed-commit.yml`. `revision.yml` still works and calls it.
+- Examples: `examples/merge-queue-placeholder.yml`, which publishes the merge queue's status as a success on each
+  pull request. GitHub needs a required status on the pull request before it can enter the queue, and the README's
+  merge queue step now says so.
 - Examples: a workflow that tells mabl a pull request merged. The deployed commit example now says its stage's
   checks need `must_pass`; without it the status reads success before the tests finish.
 
