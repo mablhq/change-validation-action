@@ -7,6 +7,7 @@ export const INPUTS = {
   'api-url': 'MABL_API_URL',
   stage: 'CHANGE_VALIDATION_STAGE',
   command: 'CHANGE_VALIDATION_COMMAND',
+  'trigger-word': 'CHANGE_VALIDATION_TRIGGER_WORD',
   'change-description': 'CHANGE_DESCRIPTION',
   'change-description-head-sha': 'CHANGE_DESCRIPTION_HEAD_SHA',
   'head-sha': 'CHANGE_VALIDATION_HEAD_SHA',

@@ -54,7 +54,7 @@ on:
         required: true
     outputs:
       status:
-        description: success or failure, as published; empty when nothing was
+        description: success, failure or error, as published; empty when nothing was
         value: ${{ jobs.await.outputs.status }}
 
 jobs:
@@ -80,19 +80,3 @@ jobs:
           status-context: ${{ inputs.status-context }}
           deadline-minutes: ${{ inputs.deadline-minutes }}
           comment: ${{ inputs.comment }}
-      # The action failed before publishing anything, so the required context would otherwise stay pending
-      # until the queue times out.
-      - name: Publish error when nothing was published
-        if: ${{ !cancelled() && steps.await.outcome == 'failure' && steps.await.outputs.status == '' }}
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.event.merge_group.head_sha }}
-          CONTEXT: ${{ inputs.status-context }}
-          OUTCOME: ${{ steps.await.outputs.outcome }}
-        run: |
-          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
-            -f state=error \
-            -f context="${CONTEXT}" \
-            -f description="mabl change validation ended without a status (${OUTCOME:-failed}); see the job log" \
-            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null

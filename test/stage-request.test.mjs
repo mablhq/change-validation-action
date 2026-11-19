@@ -836,6 +836,49 @@ describe('the trigger word alone', () => {
   });
 });
 
+describe('the trigger-word input', () => {
+  const WORD = {CHANGE_VALIDATION_TRIGGER_WORD: '/mabl', CHANGE_VALIDATION_COMMAND: 'not this'};
+  const commentOf = (body, association = 'MEMBER') => commentEvent(association, {comment: {author_association: association, body, user: {login: 'dev'}}});
+
+  it("sends the rest of the comment's first line as the command, not the command input", async () => {
+    const stubbed = stub();
+    const {exitCode} = await runWith('issue_comment', commentOf('/mabl  author 2 \r\nand a second line'), stubbed, WORD);
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(stubbed.sent()[0].event, {kind: 'command', command: 'author 2'});
+  });
+
+  for (const body of ['/mabl', '/mabl ', '/mabl\nplease']) {
+    it(`asks for the stage at the current head when the comment is ${JSON.stringify(body)}`, async () => {
+      const stubbed = stub();
+      const {exitCode} = await runWith('issue_comment', commentOf(body), stubbed, WORD);
+
+      assert.equal(exitCode, 0);
+      assert.equal(stubbed.sent()[0].event.kind, 'stage.requested');
+      assert.equal(stubbed.sent()[0].event.head_sha, HEAD);
+    });
+  }
+
+  for (const body of ['looks good', '/mablx author 2', ' /mabl', 'please /mabl', '']) {
+    it(`skips the comment ${JSON.stringify(body)} from anyone, before checking who wrote it`, async () => {
+      const stubbed = stub();
+      const {exitCode, outputs} = await runWith('issue_comment', commentOf(body, 'NONE'), stubbed, WORD);
+
+      assert.equal(exitCode, 0);
+      assert.equal(outputs.outcome, 'skipped');
+      assert.equal(stubbed.calls.length, 0);
+    });
+  }
+
+  it('still refuses a commenter who is not trusted', async () => {
+    const stubbed = stub();
+    const {outputs} = await runWith('issue_comment', commentOf('/mabl author 2', 'NONE'), stubbed, WORD);
+
+    assert.equal(outputs.outcome, 'refused');
+    assert.equal(stubbed.calls.length, 0);
+  });
+});
+
 const QUEUE_HEAD = 'd'.repeat(40);
 // The entry ahead in the queue: the queue commit's first parent, which is not the target branch's base.
 const QUEUE_PARENT = '1'.repeat(40);

@@ -64,7 +64,8 @@ on:
 
 jobs:
   stage-request:
-    # Fork pull requests get no secrets, and Dependabot's get only Dependabot secrets.
+    # Fork pull requests get no secrets, and Dependabot's get only Dependabot secrets. The comment check keeps
+    # other comments from starting a runner; the action makes it again.
     if: >-
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository &&
@@ -85,16 +86,6 @@ jobs:
       outcome: ${{ steps.send.outputs.outcome }}
       session-id: ${{ steps.send.outputs.session-id }}
     steps:
-      # The comment's first line after the trigger word; empty for the word alone.
-      - id: command
-        if: github.event_name == 'issue_comment'
-        shell: bash
-        env:
-          BODY: ${{ github.event.comment.body }}
-          TRIGGER: ${{ inputs.trigger-word }}
-        run: |
-          first=$(printf '%s\n' "$BODY" | head -n 1 | tr -d '\r')
-          printf 'text=%s\n' "${first#"$TRIGGER"}" >> "$GITHUB_OUTPUT"
       - id: send
         uses: mablhq/change-validation-action@v1
         with:
@@ -102,7 +93,7 @@ jobs:
           workspace-id: ${{ inputs.workspace-id }}
           api-url: ${{ inputs.api-url }}
           stage: ${{ inputs.stage }}
-          command: ${{ steps.command.outputs.text }}
+          trigger-word: ${{ inputs.trigger-word }}
           dry-run: ${{ inputs.dry-run }}
           file: ${{ inputs.file }}
           comment: ${{ inputs.comment }}
