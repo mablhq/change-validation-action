@@ -8,7 +8,8 @@ import {readFileSync} from 'node:fs';
 import {DEFAULT_API_URL, apiUrlOf, basicAuthorization, oneLine} from './lib/mabl-api.mjs';
 import {buildDescription, globToRegExp, groupByArea} from './lib/describe.mjs';
 import {POLICY_FILE, escapeInvisible, readPolicyAt} from './lib/policy-read.mjs';
-import {awaitStage} from './await-status.mjs';
+import {awaitStage, endWithErrorStatus} from './await-status.mjs';
+import {commentCommand} from './command.mjs';
 import {COMMIT_SHA, MAX_ANNOTATION_CHARS, TITLE, redactor, repositoryIdOf} from './lib/shared.mjs';
 import {annotation, shorten} from './lib/workflow-commands.mjs';
 import {REVISION_EVENTS, revisionHead} from './revision.mjs';
@@ -706,6 +707,7 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
   let number;
   let kind;
   let fromComment = false;
+  let command = '';
   let queued;
   if (eventName === 'pull_request') {
     if (payload.action === 'closed') {
@@ -726,6 +728,10 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
     if (payload.action !== 'created') {
       return {skip: `issue_comment ${payload.action} is not sent`};
     }
+    command = commentCommand({env, payload});
+    if (command === null) {
+      return {skip: 'the comment does not start with the trigger word'};
+    }
     const association = payload.comment?.author_association;
     if (!TRUSTED_ASSOCIATIONS.has(association)) {
       throw new Refusal(`comments are taken only from an owner, member or collaborator; the commenter is ${association ?? 'unknown'}`);
@@ -733,7 +739,7 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
     number = payload.issue.number;
     fromComment = true;
     // The trigger word alone sends the PR's current head, which starts its agent if it has none.
-    kind = String(env.CHANGE_VALIDATION_COMMAND ?? '').trim() === '' ? undefined : 'command';
+    kind = command === '' ? undefined : 'command';
   } else if (eventName === 'merge_group') {
     if (payload.action !== 'checks_requested') {
       return {skip: `merge_group ${payload.action} is not sent`};
@@ -780,7 +786,6 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
     }
   }
   if (kind === 'command') {
-    const command = String(env.CHANGE_VALIDATION_COMMAND ?? '').trim();
     if (!env.GITHUB_RUN_ID || !env.GITHUB_RUN_ATTEMPT) {
       throw new Error('GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT are required for a command');
     }
@@ -1018,17 +1023,21 @@ export async function run({
 } = {}) {
   if (env.CHANGE_VALIDATION_AWAIT === 'true') {
     const invokedAt = now();
-    return awaitStage({
-      env,
-      fetchImpl,
-      sleep,
-      now,
-      signalAfter,
-      invokedAt,
-      print,
-      apiUrl: apiUrlOf(env),
-      sendStage,
-    });
+    try {
+      return await awaitStage({
+        env,
+        fetchImpl,
+        sleep,
+        now,
+        signalAfter,
+        invokedAt,
+        print,
+        apiUrl: apiUrlOf(env),
+        sendStage,
+      });
+    } catch (error) {
+      return endWithErrorStatus({env, fetchImpl, signalAfter, print}, `await stopped: ${error?.message ?? error}`);
+    }
   }
   const {exitCode, outputs} = await sendStage({env, fetchImpl, sleep, now, print});
   return {exitCode, outputs};

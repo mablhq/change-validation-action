@@ -22,7 +22,7 @@ jobs:
       contents: read
       pull-requests: read
       statuses: write
-    uses: mablhq/change-validation-action/.github/workflows/revision.yml@v1
+    uses: mablhq/change-validation-action/.github/workflows/deployed-commit.yml@v1
     with:
       stage: staging
       workspace-id: your-workspace-id

@@ -5,6 +5,7 @@ import {readFileSync} from 'node:fs';
 
 import {escapeInvisible} from './lib/policy-read.mjs';
 import {basicAuthorization, oneLine} from './lib/mabl-api.mjs';
+import {commentCommand} from './command.mjs';
 import {COMMIT_SHA, MAX_ANNOTATION_CHARS, MINUTE_MS, TITLE, isObject, redactor} from './lib/shared.mjs';
 import {annotation, shorten} from './lib/workflow-commands.mjs';
 import {REVISION_EVENTS, revisionHead} from './revision.mjs';
@@ -138,27 +139,80 @@ async function postStatus({github, sha, state, context, description, targetUrl, 
   }
 }
 
+// Where await mode publishes: the status context, the commit, and how to reach GitHub. `target` is
+// null when the event names no commit.
+function statusTarget(env) {
+  const eventName = env.GITHUB_EVENT_NAME;
+  let payload = null;
+  try {
+    payload = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH ?? '', 'utf8'));
+  } catch {
+    payload = null;
+  }
+  let head = String(payload?.merge_group?.head_sha ?? '');
+  if (REVISION_EVENTS.has(eventName)) {
+    try {
+      head = revisionHead({eventName, payload, env});
+    } catch {
+      head = '';
+    }
+  }
+  const normalizedHead = head.toLowerCase();
+  const github = {
+    apiUrl: (env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, ''),
+    repository: env.GITHUB_REPOSITORY ?? '',
+    token: env.GH_TOKEN ?? '',
+  };
+  const serverUrl = (env.GITHUB_SERVER_URL || 'https://github.com').replace(/\/+$/, '');
+  return {
+    payload,
+    context: oneLine(env.STATUS_CONTEXT),
+    target: COMMIT_SHA.test(normalizedHead) ? normalizedHead : null,
+    github,
+    runUrl: env.GITHUB_RUN_ID ? `${serverUrl}/${github.repository}/actions/runs/${env.GITHUB_RUN_ID}` : undefined,
+  };
+}
+
+// Ends an awaited run that never got to a conclusion, on an input it can't use or an error nobody
+// expected, by publishing `error` when it can, in one attempt. A required context then doesn't stay
+// pending, and an earlier status for the same commit doesn't stand in for this run's.
+export async function endWithErrorStatus({env, fetchImpl, signalAfter, print}, message) {
+  const redact = redactor(env);
+  print(annotation('error', shorten(escapeInvisible(redact(message)), MAX_ANNOTATION_CHARS), {title: TITLE}));
+  const {context, target, github, runUrl} = statusTarget(env);
+  let status = '';
+  if (context && target) {
+    const description = shorten(oneLine(redact(message)), MAX_DESCRIPTION_CHARS);
+    const signal = signalAfter(GITHUB_TIMEOUT_MS, 'publish');
+    const answer = await postStatus({github, sha: target, state: 'error', context, description, targetUrl: runUrl, fetchImpl, signal});
+    print(`${context}: error (${answer.status || 'no answer'}): ${description}`);
+    status = answer.status >= 200 && answer.status < 300 ? 'error' : '';
+  }
+  return {exitCode: 1, outputs: {outcome: 'failed', 'session-id': '', created: '', agent: '', 'description-source': '', status}};
+}
+
 export async function awaitStage({env, fetchImpl, sleep, now, signalAfter, invokedAt, print, apiUrl, sendStage}) {
   const apiKey = env.MABL_API_KEY ?? '';
   const redact = redactor(env);
   const report = (level, message) =>
     print(annotation(level, shorten(escapeInvisible(redact(message)), MAX_ANNOTATION_CHARS), {title: TITLE}));
-  // A command is never awaited, so it needs none of the await inputs.
   const eventName = env.GITHUB_EVENT_NAME;
-  if (eventName === 'issue_comment' && String(env.CHANGE_VALIDATION_COMMAND ?? '').trim() !== '') {
-    report('notice', 'await applies to stage requests; the command is sent without waiting');
+  const {payload, context, target, github, runUrl} = statusTarget(env);
+  // Neither a command nor a comment that isn't for mabl is awaited, so they need none of the await inputs.
+  const command = eventName === 'issue_comment' ? commentCommand({env, payload}) : '';
+  const notForMabl = command === null;
+  if (command !== '') {
+    if (!notForMabl) {
+      report('notice', 'await applies to stage requests; the command is sent without waiting');
+    }
     const {exitCode, outputs} = await sendStage({env, fetchImpl, sleep, now, print});
     return {exitCode, outputs: {...outputs, status: ''}};
   }
   const isRevision = REVISION_EVENTS.has(eventName);
   const stage = String(env.CHANGE_VALIDATION_STAGE ?? '').trim();
-  const context = oneLine(env.STATUS_CONTEXT);
   const minutesText = String(env.DEADLINE_MINUTES ?? '').trim() || String(DEFAULT_DEADLINE_MINUTES);
   const minutes = /^[0-9]+$/.test(minutesText) ? Number(minutesText) : NaN;
-  const failed = (message) => {
-    report('error', message);
-    return {exitCode: 1, outputs: {outcome: 'failed', 'session-id': '', created: '', agent: '', 'description-source': '', status: ''}};
-  };
+  const failed = (message) => endWithErrorStatus({env, fetchImpl, signalAfter, print}, message);
   if (eventName !== 'merge_group' && !isRevision) {
     return failed(`await mode runs on merge_group events and revisions (${[...REVISION_EVENTS].join(', ')}), not ${eventName || 'none'}`);
   }
@@ -169,35 +223,12 @@ export async function awaitStage({env, fetchImpl, sleep, now, signalAfter, invok
     return failed(`deadline-minutes has to be a whole number from 1 to ${MAX_DEADLINE_MINUTES}, got ${minutesText}`);
   }
 
-  let payload = null;
-  try {
-    payload = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH ?? '', 'utf8'));
-  } catch {
-    payload = null;
-  }
-  let head = String(payload?.merge_group?.head_sha ?? '');
-  if (isRevision) {
-    try {
-      head = revisionHead({eventName, payload, env});
-    } catch {
-      head = '';
-    }
-  }
-  const normalizedHead = head.toLowerCase();
-  const target = COMMIT_SHA.test(normalizedHead) ? normalizedHead : null;
   const where = isRevision ? 'the revision' : 'the merge group';
   const overall = budgetAt({invokedAt, minutes});
   const finishBy = overall + PUBLISH_GRACE_MS;
   // Every request while preparing and sending is cut off at the overall budget.
   const overallSignal = signalAfter(Math.max(0, overall - now()), 'overall');
   const budgeted = (url, init = {}) => fetchImpl(url, {...init, signal: init.signal ? AbortSignal.any([init.signal, overallSignal]) : overallSignal});
-  const github = {
-    apiUrl: (env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, ''),
-    repository: env.GITHUB_REPOSITORY ?? '',
-    token: env.GH_TOKEN ?? '',
-  };
-  const serverUrl = (env.GITHUB_SERVER_URL || 'https://github.com').replace(/\/+$/, '');
-  const runUrl = env.GITHUB_RUN_ID ? `${serverUrl}/${github.repository}/actions/runs/${env.GITHUB_RUN_ID}` : undefined;
   const clean = (value) => shorten(oneLine(redact(value)), MAX_DESCRIPTION_CHARS);
 
   // Posts one commit status, retrying 429, 5xx and no answer, and done by `by`; null when it landed,

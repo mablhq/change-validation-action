@@ -49,8 +49,6 @@ sends the contents of the files your change touches. Don't put secrets in a pull
    on:
      pull_request:
        types: [opened, synchronize, reopened, edited]
-     issue_comment:
-       types: [created]
    jobs:
      mabl:
        permissions:
@@ -65,7 +63,9 @@ sends the contents of the files your change touches. Don't put secrets in a pull
    ```
 
 3. **Gate the merge queue (optional).** Add [examples/merge-queue-after-preview.yml](examples/merge-queue-after-preview.yml)
-   after the job that deploys the queue's commit, and require its status context in your branch rules.
+   after the job that deploys the queue's commit, and require its status context in your branch rules. GitHub
+   also wants a required status on the pull request before it enters the queue, so add
+   [examples/merge-queue-placeholder.yml](examples/merge-queue-placeholder.yml) too.
 
 For a stage that runs after a merge deploys, such as to a shared staging environment, see
 [examples/revision-after-deploy.yml](examples/revision-after-deploy.yml). To check the policy file on the pull
@@ -105,9 +105,9 @@ or the action refuses it. `base-sha` is the commit the environment ran before, w
 |---|---|
 | `mablhq/change-validation-action@v1` | The action: send one stage request, and with `await`, wait for the stage's status and publish it as a commit status |
 | `mablhq/change-validation-action/policy@v1` | Check a policy file at a commit and show what changes from another. See [policy/README.md](policy/README.md) |
-| `.github/workflows/pull-request.yml` | Reusable: pull request stages, plus a `/mabl` comment that sends the current head again |
+| `.github/workflows/pull-request.yml` | Reusable: pull request stages, and [comment commands](#comment-commands) if you add the trigger |
 | `.github/workflows/merge-queue.yml` | Reusable: a merge queue stage, awaited and published as a commit status |
-| `.github/workflows/revision.yml` | Reusable: a stage for a deployed commit (`scope: revision` in the policy) |
+| `.github/workflows/deployed-commit.yml` | Reusable: a stage for a deployed commit (`scope: revision` in the policy). `revision.yml`, its earlier name, still works |
 | `.github/workflows/policy-check.yml` | Reusable: the policy check on pull requests |
 
 ## The action's inputs
@@ -125,20 +125,27 @@ or the action refuses it. `base-sha` is the commit the environment ran before, w
 | `change-description` | built from the pull request | What the change does, in product terms, written by any earlier step. When empty, the action builds one from the pull request's title, body, changed paths per application and diff totals |
 | `change-description-head-sha` | | The head `change-description` was written for; required with it |
 | `head-sha`, `base-sha` | the event's | For a deployed commit: the commit, and the one the environment ran before |
-| `command` | | On `issue_comment`, the text after your trigger word, sent to the pull request's mabl agent |
+| `trigger-word` | | On `issue_comment`, the word a comment must start with, such as `/mabl`. See [Comment commands](#comment-commands) |
+| `command` | | On `issue_comment` without `trigger-word`, the text after your own trigger word, sent to the pull request's mabl agent |
 | `comment` | `false` | `true` keeps one comment on the pull request with mabl's report. See [The pull request comment](#the-pull-request-comment) |
 | `comment-wait-minutes` | `15` | With `comment`, how long after a pull request stage request to keep the comment current |
 | `api-url` | `https://api.mabl.com` | The mabl api; no other is accepted |
 | `token` | `github.token` | Reads the pull request and the policy file; with `await`, needs `statuses: write`; with `comment`, `pull-requests: write` |
 
 Outputs: `outcome`, `session-id`, `created`, `agent`, `description-source` (`built` or `provided`), and with
-`await`, `status` (`success` or `failure`). When the request was sent, `outcome` is `accepted`, `duplicate` or
-`superseded`. Otherwise it says why not: `skipped`, `entry_gone` (a merge queue build the queue dropped),
+`await`, `status` (`success`, `failure` or `error`). When the request was sent, `outcome` is `accepted`,
+`duplicate` or `superseded`. Otherwise it says why not: `skipped`, `entry_gone` (a merge queue build the queue dropped),
 `refused`, `feature_disabled`, `change_agent_closed` (validation was turned off for the pull request), another
 error code from mabl, `failed`, or with `await`, `timed_out`.
 
 If change validation is off for the workspace, mabl answers `feature_disabled`: the step passes with a notice and
 nothing is validated. With `await`, the commit status is `failure`, so a gate can't pass on a stage nobody judged.
+
+If an awaited run stops before it gets that far, on an input it can't use or an error it didn't expect, it
+publishes `error` on the status context and sets `status` to `error`, so a required status doesn't stay pending.
+With no status context or commit to publish to, `status` stays empty. A run that is killed outright publishes
+nothing, and an earlier status for the same commit stays in place; the reusable workflows add a last step that
+publishes `error` for that case, and if you call the action yourself you can copy it.
 
 ## The pull request comment
 
@@ -170,6 +177,32 @@ the prose.
   commands only from owners, members and collaborators, and the action then checks the commenter has write access;
   keep the first check if you call the action yourself.
 
+## Comment commands
+
+Optional, and off until you add the trigger. To let people with write access reach a pull request's mabl agent
+from a comment, add `issue_comment` to the workflow that calls `pull-request.yml`:
+
+```yaml
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  issue_comment:
+    types: [created]
+```
+
+- A comment that is exactly `/mabl` sends the pull request's current head again. Anything after the word, on the
+  comment's first line, goes to the pull request's mabl agent as is. The workflow's `trigger-word` input changes
+  the word.
+- Any other comment is skipped. GitHub still lists a skipped run for every comment on an issue or pull request,
+  which is why the trigger isn't in the quickstart.
+- Comments are taken only from owners, members and collaborators who have write access.
+- The text goes to the pull request's mabl agent, which acts as the API key that started it, not as the
+  commenter. Anyone who can comment with write access can steer it with that key's rights, so add the trigger only
+  where you'd trust them with that. Whether a check passed still comes from fixed rules, never from what a comment
+  says.
+- If you call the action yourself, set its `trigger-word`, and keep an `if:` on the job, as the reusable workflow
+  does, so other comments don't start a runner.
+
 ## Good to know
 
 - **Each pull request gets one mabl agent**, started by its first stage request. It analyzes each head it's sent,
@@ -194,17 +227,16 @@ the prose.
   merged, as [examples/pull-request-merged.yml](examples/pull-request-merged.yml) does; with
   `merge_mabl_branches: true` in the policy, mabl then merges the pull request's mabl branch into master. A pull
   request closed without merging sends nothing.
-- **Comment commands.** On `issue_comment`, the reusable workflow passes the first line after its trigger word
-  (`/mabl` by default) to the pull request's mabl agent as is; the word alone sends the current head again.
 - **Awaiting a deployed commit.** Two runs for the same commit and `status-context` can overlap, and the later
-  write wins. The reusable `revision.yml` makes them take turns; if you call the action directly, give those runs a
-  shared `concurrency` group with `cancel-in-progress: false`.
+  write wins. The reusable `deployed-commit.yml` makes them take turns; if you call the action directly, give
+  those runs a shared `concurrency` group with `cancel-in-progress: false`.
 - **Pinning.** The reusable workflows call this action at `@v1`, so a workflow pinned to a commit still runs the
   action `v1` points to. To pin everything, call the action itself at a commit.
 
 ## Learn more
 
 - [Policy file reference](docs/policy-file.md) and [policy check](policy/README.md)
+- [Build your own client](docs/build-your-own-client.md), for pipelines that aren't on GitHub Actions
 - [Change validation in the mabl API reference](https://api.help.mabl.com/reference/sendchangevalidationevent),
   for every status, reason and error code
 - [How test impact analysis works](https://help.mabl.com/hc/en-us/articles/53552823585044)

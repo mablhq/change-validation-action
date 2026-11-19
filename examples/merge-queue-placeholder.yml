@@ -1,0 +1,23 @@
+# .github/workflows/mabl-merge-queue-placeholder.yml
+# GitHub lets a pull request into the merge queue only once its required checks have passed on the pull request
+# itself. The `mabl-merge-queue` status is published in the queue, so this workflow publishes it as a success on
+# each pull request first. The real result comes from examples/merge-queue-after-preview.yml.
+# Pull requests from forks get a read-only token, so this job fails on them and they can't be queued.
+name: mabl merge queue placeholder
+on:
+  pull_request:
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
+            -f state=success \
+            -f context=mabl-merge-queue \
+            -f description="mabl validates this in the merge queue" >/dev/null

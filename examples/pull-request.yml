@@ -1,12 +1,9 @@
 # .github/workflows/mabl-pull-request.yml
-# Asks mabl to validate each pull request, and lets anyone with write access comment `/mabl` to send the
-# current head again.
+# Asks mabl to validate each pull request. To also take `/mabl` comments, see "Comment commands" in the README.
 name: mabl pull request
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
-  issue_comment:
-    types: [created]
 
 jobs:
   mabl:

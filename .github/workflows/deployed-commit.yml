@@ -1,0 +1,118 @@
+name: mabl change validation (deployed commit)
+
+# Asks mabl to validate a stage for a commit that was merged and deployed, such as to a shared staging
+# environment. The stage needs `scope: revision` in your policy. With `await`, it waits for the stage's status
+# and publishes it on the commit as `status-context`, which a later promotion can require.
+#
+# Call it after your deploy finishes: from a job that `needs` the deploy, or on deployment_status,
+# workflow_run or push. The calling job grants: contents: read, pull-requests: read, and statuses: write with
+# await.
+
+on:
+  workflow_call:
+    inputs:
+      stage:
+        description: "The policy stage to validate, one with `scope: revision`"
+        type: string
+        required: true
+      head-sha:
+        description: The deployed commit; the event's commit when empty
+        type: string
+        default: ''
+      base-sha:
+        description: The commit the environment ran before; required except on a branch push
+        type: string
+        default: ''
+      await:
+        description: Wait for the stage's status and publish it as status-context
+        type: boolean
+        default: false
+      status-context:
+        description: With await, the commit status context to publish
+        type: string
+        default: ''
+      deadline-minutes:
+        description: With await, how long after the stage request to wait, 1 to 120
+        type: number
+        default: 40
+      timeout-minutes:
+        description: The job's timeout; with await, keep it at least deadline-minutes + 5
+        type: number
+        default: 45
+      dry-run:
+        description: Report what would run without starting any test run
+        type: boolean
+        default: false
+      file:
+        description: The policy file's path in the repository
+        type: string
+        default: .mabl/policy.yaml
+      workspace-id:
+        description: The id of the mabl workspace to validate in
+        type: string
+        required: true
+      api-url:
+        description: The mabl api; https://api.mabl.com is the only one accepted
+        type: string
+        default: https://api.mabl.com
+    secrets:
+      mabl-api-key:
+        description: A mabl API key of the Command Line Interface or Editor type
+        required: true
+    outputs:
+      outcome:
+        description: accepted, duplicate or superseded when sent; otherwise why not
+        value: ${{ jobs.stage-request.outputs.outcome }}
+      status:
+        description: With await, success, failure or error as published
+        value: ${{ jobs.stage-request.outputs.status }}
+
+jobs:
+  stage-request:
+    # With await, runs for one commit and status context take turns, so an older run's late status can't
+    # land after a newer run's.
+    concurrency:
+      group: ${{ inputs.await && format('mabl-revision-{0}-{1}', inputs.status-context, inputs.head-sha || github.event.deployment.sha || github.event.workflow_run.head_sha || github.sha) || format('mabl-revision-run-{0}', github.run_id) }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      outcome: ${{ steps.send.outputs.outcome }}
+      status: ${{ steps.send.outputs.status }}
+    steps:
+      - id: send
+        continue-on-error: ${{ inputs.await }}
+        uses: mablhq/change-validation-action@v1
+        with:
+          mabl-api-key: ${{ secrets.mabl-api-key }}
+          workspace-id: ${{ inputs.workspace-id }}
+          api-url: ${{ inputs.api-url }}
+          stage: ${{ inputs.stage }}
+          head-sha: ${{ inputs.head-sha }}
+          base-sha: ${{ inputs.base-sha }}
+          dry-run: ${{ inputs.dry-run }}
+          file: ${{ inputs.file }}
+          await: ${{ inputs.await }}
+          status-context: ${{ inputs.status-context }}
+          deadline-minutes: ${{ inputs.deadline-minutes }}
+      # The action publishes its own error when it can. This covers a run that died before it could, so an
+      # earlier status for the same commit doesn't stand in for this run's.
+      - name: Publish error when nothing was published
+        if: ${{ !cancelled() && inputs.await && steps.send.outcome == 'failure' && steps.send.outputs.status == '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.head-sha || github.event.deployment.sha || github.event.workflow_run.head_sha || github.sha }}
+          CONTEXT: ${{ inputs.status-context }}
+          OUTCOME: ${{ steps.send.outputs.outcome }}
+        run: |
+          SHA="${SHA,,}"
+          if [[ ! "${SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=mabl change validation::no status published: the commit is not a 40-character sha"
+            exit 1
+          fi
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
+            -f state=error \
+            -f context="${CONTEXT}" \
+            -f description="mabl change validation ended without a status (${OUTCOME:-failed}); see the job log" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null

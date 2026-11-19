@@ -2,7 +2,8 @@ name: mabl change validation (merge queue)
 
 # Asks mabl to validate a merge queue entry's stage, waits for the stage's status, and publishes it on the
 # queue's commit as the commit status `status-context`. Make that context a required check, not this job: the
-# job passes either way, so a rerun or a superseded entry never leaves a red job behind.
+# job passes either way, so a rerun or a superseded entry never leaves a red job behind. It fails only when no
+# status could be published at all.
 #
 # Call it on merge_group, from a job that `needs` the one deploying the queue's commit, so the tests run
 # against what will merge. With `comment: true` it also updates the pull request's comment with mabl's report once
@@ -54,7 +55,7 @@ on:
         required: true
     outputs:
       status:
-        description: success or failure, as published; empty when nothing was
+        description: success, failure or error, as published; empty when nothing was
         value: ${{ jobs.await.outputs.status }}
 
 jobs:
@@ -80,8 +81,8 @@ jobs:
           status-context: ${{ inputs.status-context }}
           deadline-minutes: ${{ inputs.deadline-minutes }}
           comment: ${{ inputs.comment }}
-      # The action failed before publishing anything, so the required context would otherwise stay pending
-      # until the queue times out.
+      # The action publishes its own error when it can. This covers a run that died before it could, so the
+      # required context doesn't stay pending until the queue times out.
       - name: Publish error when nothing was published
         if: ${{ !cancelled() && steps.await.outcome == 'failure' && steps.await.outputs.status == '' }}
         shell: bash

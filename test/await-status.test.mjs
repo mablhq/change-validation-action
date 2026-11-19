@@ -808,14 +808,83 @@ describe('await inputs', () => {
     }
   });
 
-  it('needs a status context and a deadline in range, before sending anything', async () => {
-    for (const env of [{STATUS_CONTEXT: ''}, {DEADLINE_MINUTES: '0'}, {DEADLINE_MINUTES: '121'}, {DEADLINE_MINUTES: '4.5'}]) {
+  it('needs a status context, before sending anything', async () => {
+    const stubbed = queueStub();
+    const {exitCode, outputs} = await awaitWith('merge_group', mergeGroup, stubbed, {STATUS_CONTEXT: ''});
+
+    assert.equal(exitCode, 1);
+    assert.equal(outputs.status, '');
+    assert.equal(stubbed.calls.length, 0);
+  });
+
+  it('needs a deadline in range, and publishes error rather than leave the context pending', async () => {
+    for (const minutes of ['0', '121', '4.5']) {
       const stubbed = queueStub();
-      const {exitCode} = await awaitWith('merge_group', mergeGroup, stubbed, env);
+      const {exitCode, outputs} = await awaitWith('merge_group', mergeGroup, stubbed, {DEADLINE_MINUTES: minutes});
 
       assert.equal(exitCode, 1);
-      assert.equal(stubbed.calls.length, 0);
+      assert.equal(outputs.outcome, 'failed');
+      assert.equal(outputs.status, 'error');
+      assert.equal(stubbed.calls.length, 1);
+      assert.deepEqual(
+        stubbed.published().map(({at, ...status}) => status),
+        [{sha: QUEUE_HEAD, state: 'error', context: CONTEXT, description: `deadline-minutes has to be a whole number from 1 to 120, got ${minutes}`, target_url: RUN_URL}],
+      );
     }
+  });
+
+  it("leaves the status output empty when the error can't be published", async () => {
+    const stubbed = queueStub({published: [{status: 403}]});
+    const {exitCode, outputs} = await awaitWith('merge_group', mergeGroup, stubbed, {DEADLINE_MINUTES: '0'});
+
+    assert.equal(exitCode, 1);
+    assert.equal(outputs.status, '');
+    assert.equal(stubbed.published().length, 1);
+  });
+
+  it('publishes error when the wait stops on an error nobody expected', async () => {
+    const stubbed = queueStub({statuses: [json(200, statusOf({gate: 'wait', checks: [check({status: 'running'})], summary: 'running'}))]});
+    const broken = {
+      ...stubbed,
+      sleep: async () => {
+        throw new Error(`the timer broke ${API_KEY}`);
+      },
+    };
+    const {exitCode, outputs, lines} = await awaitWith('merge_group', mergeGroup, broken);
+
+    assert.equal(exitCode, 1);
+    assert.equal(outputs.outcome, 'failed');
+    assert.equal(outputs.status, 'error');
+    const published = stubbed.published();
+    // Pending for the accepted request, pending again with the first read's summary, then the error.
+    assert.deepEqual(
+      published.map(({state}) => state),
+      ['pending', 'pending', 'error'],
+    );
+    assert.equal(last(published).description, 'await stopped: the timer broke ***');
+    assert.ok(lines.some((line) => line.startsWith('::error') && line.includes('await stopped: the timer broke ***')));
+  });
+
+  it('skips a comment that does not start with the trigger word, publishing nothing', async () => {
+    const stubbed = stub({clockStart: 0});
+    const comment = {...triggerComment, comment: {...triggerComment.comment, body: 'looks good to me'}};
+    const {exitCode, outputs, lines} = await awaitWith('issue_comment', comment, stubbed, {CHANGE_VALIDATION_TRIGGER_WORD: '/mabl'});
+
+    assert.equal(exitCode, 0);
+    assert.equal(outputs.outcome, 'skipped');
+    assert.equal(outputs.status, '');
+    assert.equal(stubbed.calls.length, 0);
+    assert.ok(!lines.some((line) => line.includes('the command is sent without waiting')));
+  });
+
+  it('reads the command after the trigger word, and sends it without waiting', async () => {
+    const stubbed = stub({clockStart: 0, events: [json(201, {session_id: 's1-as', event: 'accepted'})]});
+    const comment = {...triggerComment, comment: {...triggerComment.comment, body: '/mabl author 2'}};
+    const {exitCode} = await awaitWith('issue_comment', comment, stubbed, {CHANGE_VALIDATION_TRIGGER_WORD: '/mabl'});
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(JSON.parse(stubbed.events()[0].body).event, {kind: 'command', command: 'author 2'});
+    assert.deepEqual(stubbed.published(), []);
   });
 
   it('publishes nothing and adds no output without await', async () => {
