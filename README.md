@@ -65,7 +65,9 @@ sends the contents of the files your change touches. Don't put secrets in a pull
    ```
 
 3. **Gate the merge queue (optional).** Add [examples/merge-queue-after-preview.yml](examples/merge-queue-after-preview.yml)
-   after the job that deploys the queue's commit, and require its status context in your branch rules.
+   after the job that deploys the queue's commit, and require its status context in your branch rules. GitHub
+   also wants a required status on the pull request before it enters the queue, so add
+   [examples/merge-queue-placeholder.yml](examples/merge-queue-placeholder.yml) too.
 
 For a stage that runs after a merge deploys, such as to a shared staging environment, see
 [examples/revision-after-deploy.yml](examples/revision-after-deploy.yml). To check the policy file on the pull
@@ -205,6 +207,7 @@ the prose.
 ## Learn more
 
 - [Policy file reference](docs/policy-file.md) and [policy check](policy/README.md)
+- [Build your own client](docs/build-your-own-client.md), for pipelines that aren't on GitHub Actions
 - [Change validation in the mabl API reference](https://api.help.mabl.com/reference/sendchangevalidationevent),
   for every status, reason and error code
 - [How test impact analysis works](https://help.mabl.com/hc/en-us/articles/53552823585044)
