@@ -239,8 +239,9 @@ on:
 - [Build your own client](docs/build-your-own-client.md), for pipelines that aren't on GitHub Actions
 - [Change validation in the mabl API reference](https://api.help.mabl.com/reference/sendchangevalidationevent),
   for every status, reason and error code
-- [How test impact analysis works](https://help.mabl.com/hc/en-us/articles/53552823585044)
-- [Test impact analysis in CI/CD](https://help.mabl.com/hc/en-us/articles/53454030677140)
+- [How change validation works](https://help.mabl.com/hc/en-us/articles/55751436186260)
+- [Run change validation from your own CI](https://help.mabl.com/hc/en-us/articles/55397902734740)
+- [Set up a mabl policy file](https://help.mabl.com/hc/en-us/articles/55397934515348)
 
 Questions: support@mabl.com
 
