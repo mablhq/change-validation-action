@@ -133,16 +133,19 @@ or the action refuses it. `base-sha` is the commit the environment ran before, w
 | `token` | `github.token` | Reads the pull request and the policy file; with `await`, needs `statuses: write`; with `comment`, `pull-requests: write` |
 
 Outputs: `outcome`, `session-id`, `created`, `agent`, `description-source` (`built` or `provided`), and with
-`await`, `status` (`success`, `failure` or `error`). When the request was sent, `outcome` is `accepted`, `duplicate` or
-`superseded`. Otherwise it says why not: `skipped`, `entry_gone` (a merge queue build the queue dropped),
+`await`, `status` (`success`, `failure` or `error`). When the request was sent, `outcome` is `accepted`,
+`duplicate` or `superseded`. Otherwise it says why not: `skipped`, `entry_gone` (a merge queue build the queue dropped),
 `refused`, `feature_disabled`, `change_agent_closed` (validation was turned off for the pull request), another
 error code from mabl, `failed`, or with `await`, `timed_out`.
 
 If change validation is off for the workspace, mabl answers `feature_disabled`: the step passes with a notice and
 nothing is validated. With `await`, the commit status is `failure`, so a gate can't pass on a stage nobody judged.
 
-If an awaited run stops before it gets that far, on a `deadline-minutes` out of range or an error it didn't expect,
-it publishes `error` on the status context and sets `status` to `error`, so a required status doesn't stay pending.
+If an awaited run stops before it gets that far, on an input it can't use or an error it didn't expect, it
+publishes `error` on the status context and sets `status` to `error`, so a required status doesn't stay pending.
+With no status context or commit to publish to, `status` stays empty. A run that is killed outright publishes
+nothing, and an earlier status for the same commit stays in place; the reusable workflows add a last step that
+publishes `error` for that case, and if you call the action yourself you can copy it.
 
 ## The pull request comment
 
@@ -187,12 +190,16 @@ on:
     types: [created]
 ```
 
-- A comment of `/mabl` alone sends the pull request's current head again. Anything after the word, on the
+- A comment that is exactly `/mabl` sends the pull request's current head again. Anything after the word, on the
   comment's first line, goes to the pull request's mabl agent as is. The workflow's `trigger-word` input changes
   the word.
 - Any other comment is skipped. GitHub still lists a skipped run for every comment on an issue or pull request,
   which is why the trigger isn't in the quickstart.
 - Comments are taken only from owners, members and collaborators who have write access.
+- The text goes to the pull request's mabl agent, which acts as the API key that started it, not as the
+  commenter. Anyone who can comment with write access can steer it with that key's rights, so add the trigger only
+  where you'd trust them with that. Whether a check passed still comes from fixed rules, never from what a comment
+  says.
 - If you call the action yourself, set its `trigger-word`, and keep an `if:` on the job, as the reusable workflow
   does, so other comments don't start a runner.
 
@@ -221,8 +228,8 @@ on:
   `merge_mabl_branches: true` in the policy, mabl then merges the pull request's mabl branch into master. A pull
   request closed without merging sends nothing.
 - **Awaiting a deployed commit.** Two runs for the same commit and `status-context` can overlap, and the later
-  write wins. The reusable `deployed-commit.yml` makes them take turns; if you call the action directly, give those runs a
-  shared `concurrency` group with `cancel-in-progress: false`.
+  write wins. The reusable `deployed-commit.yml` makes them take turns; if you call the action directly, give
+  those runs a shared `concurrency` group with `cancel-in-progress: false`.
 - **Pinning.** The reusable workflows call this action at `@v1`, so a workflow pinned to a commit still runs the
   action `v1` points to. To pin everything, call the action itself at a commit.
 

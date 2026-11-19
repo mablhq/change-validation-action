@@ -2,7 +2,8 @@ name: mabl change validation (merge queue)
 
 # Asks mabl to validate a merge queue entry's stage, waits for the stage's status, and publishes it on the
 # queue's commit as the commit status `status-context`. Make that context a required check, not this job: the
-# job passes either way, so a rerun or a superseded entry never leaves a red job behind.
+# job passes either way, so a rerun or a superseded entry never leaves a red job behind. It fails only when no
+# status could be published at all.
 #
 # Call it on merge_group, from a job that `needs` the one deploying the queue's commit, so the tests run
 # against what will merge. With `comment: true` it also updates the pull request's comment with mabl's report once
@@ -80,3 +81,19 @@ jobs:
           status-context: ${{ inputs.status-context }}
           deadline-minutes: ${{ inputs.deadline-minutes }}
           comment: ${{ inputs.comment }}
+      # The action publishes its own error when it can. This covers a run that died before it could, so the
+      # required context doesn't stay pending until the queue times out.
+      - name: Publish error when nothing was published
+        if: ${{ !cancelled() && steps.await.outcome == 'failure' && steps.await.outputs.status == '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.merge_group.head_sha }}
+          CONTEXT: ${{ inputs.status-context }}
+          OUTCOME: ${{ steps.await.outputs.outcome }}
+        run: |
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
+            -f state=error \
+            -f context="${CONTEXT}" \
+            -f description="mabl change validation ended without a status (${OUTCOME:-failed}); see the job log" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null

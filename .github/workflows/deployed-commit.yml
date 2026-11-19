@@ -95,3 +95,24 @@ jobs:
           await: ${{ inputs.await }}
           status-context: ${{ inputs.status-context }}
           deadline-minutes: ${{ inputs.deadline-minutes }}
+      # The action publishes its own error when it can. This covers a run that died before it could, so an
+      # earlier status for the same commit doesn't stand in for this run's.
+      - name: Publish error when nothing was published
+        if: ${{ !cancelled() && inputs.await && steps.send.outcome == 'failure' && steps.send.outputs.status == '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.head-sha || github.event.deployment.sha || github.event.workflow_run.head_sha || github.sha }}
+          CONTEXT: ${{ inputs.status-context }}
+          OUTCOME: ${{ steps.send.outputs.outcome }}
+        run: |
+          SHA="${SHA,,}"
+          if [[ ! "${SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=mabl change validation::no status published: the commit is not a 40-character sha"
+            exit 1
+          fi
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
+            -f state=error \
+            -f context="${CONTEXT}" \
+            -f description="mabl change validation ended without a status (${OUTCOME:-failed}); see the job log" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null

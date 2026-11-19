@@ -20,7 +20,7 @@ inputs:
     required: false
     default: 'https://api.mabl.com'
   trigger-word:
-    description: "On issue_comment, the word a comment must start with, such as /mabl. The word alone sends the pull request's current head for stage, and the rest of the comment's first line is sent to its mabl agent as a command; any other comment is skipped. When empty, every comment is taken, with command as its text"
+    description: "On issue_comment, the word a comment must start with, such as /mabl. The word alone sends the pull request's current head for stage, and the rest of the comment's first line is sent to its mabl agent as a command; any other comment is skipped. The commenter must have write access, and the command runs with the rights of the key that started the pull request's agent. When empty, every comment is taken, with command as its text"
     required: false
     default: ''
   command:

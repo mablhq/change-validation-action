@@ -12,7 +12,8 @@
 - The quickstart and `examples/pull-request.yml` no longer subscribe to `issue_comment`. Comment commands are
   optional, with their own README section.
 - With `await`, a run that stops on an input it can't use, or on an error it didn't expect, publishes `error` on
-  the status context, and `status` is `error`. The reusable workflows no longer carry their own step for this.
+  the status context, and `status` is `error`. The reusable workflows keep their own step for a run that died
+  before it could.
 - The reusable workflow for deployed commits is now `deployed-commit.yml`. `revision.yml` still works and calls it.
 - Examples: a workflow that tells mabl a pull request merged. The deployed commit example now says its stage's
   checks need `must_pass`; without it the status reads success before the tests finish.

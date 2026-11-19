@@ -162,6 +162,8 @@ response's `event` says what became of each one:
 - `head_replaced: true` means a newer request replaced the commit you named. The gate is `fail`: the result you
   were waiting for no longer applies.
 - When nothing was published by your deadline, publish a failure, so a required status doesn't stay pending.
+- When your own step stops without a result, on an input it can't use or an unexpected error, publish `error`
+  instead. Otherwise the status stays pending, or an earlier one for the same commit stays in place.
 - If change validation is off for the workspace (`feature_disabled`), fail the gate. A stage nobody judged
   shouldn't pass.
 

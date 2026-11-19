@@ -173,10 +173,10 @@ function statusTarget(env) {
   };
 }
 
-// Ends an awaited run that never got to a conclusion: an input it can't use, or an error nobody
-// expected. It publishes `error` when it can, in one attempt, so a required context doesn't stay
-// pending until the queue gives up on the commit.
-export async function endWithoutStatus({env, fetchImpl, signalAfter, print}, message) {
+// Ends an awaited run that never got to a conclusion, on an input it can't use or an error nobody
+// expected, by publishing `error` when it can, in one attempt. A required context then doesn't stay
+// pending, and an earlier status for the same commit doesn't stand in for this run's.
+export async function endWithErrorStatus({env, fetchImpl, signalAfter, print}, message) {
   const redact = redactor(env);
   print(annotation('error', shorten(escapeInvisible(redact(message)), MAX_ANNOTATION_CHARS), {title: TITLE}));
   const {context, target, github, runUrl} = statusTarget(env);
@@ -200,8 +200,9 @@ export async function awaitStage({env, fetchImpl, sleep, now, signalAfter, invok
   const {payload, context, target, github, runUrl} = statusTarget(env);
   // Neither a command nor a comment that isn't for mabl is awaited, so they need none of the await inputs.
   const command = eventName === 'issue_comment' ? commentCommand({env, payload}) : '';
+  const notForMabl = command === null;
   if (command !== '') {
-    if (command !== null) {
+    if (!notForMabl) {
       report('notice', 'await applies to stage requests; the command is sent without waiting');
     }
     const {exitCode, outputs} = await sendStage({env, fetchImpl, sleep, now, print});
@@ -211,7 +212,7 @@ export async function awaitStage({env, fetchImpl, sleep, now, signalAfter, invok
   const stage = String(env.CHANGE_VALIDATION_STAGE ?? '').trim();
   const minutesText = String(env.DEADLINE_MINUTES ?? '').trim() || String(DEFAULT_DEADLINE_MINUTES);
   const minutes = /^[0-9]+$/.test(minutesText) ? Number(minutesText) : NaN;
-  const failed = (message) => endWithoutStatus({env, fetchImpl, signalAfter, print}, message);
+  const failed = (message) => endWithErrorStatus({env, fetchImpl, signalAfter, print}, message);
   if (eventName !== 'merge_group' && !isRevision) {
     return failed(`await mode runs on merge_group events and revisions (${[...REVISION_EVENTS].join(', ')}), not ${eventName || 'none'}`);
   }

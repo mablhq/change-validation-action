@@ -856,6 +856,7 @@ describe('await inputs', () => {
     assert.equal(outputs.outcome, 'failed');
     assert.equal(outputs.status, 'error');
     const published = stubbed.published();
+    // Pending for the accepted request, pending again with the first read's summary, then the error.
     assert.deepEqual(
       published.map(({state}) => state),
       ['pending', 'pending', 'error'],

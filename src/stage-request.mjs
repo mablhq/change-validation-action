@@ -8,7 +8,7 @@ import {readFileSync} from 'node:fs';
 import {DEFAULT_API_URL, apiUrlOf, basicAuthorization, oneLine} from './lib/mabl-api.mjs';
 import {buildDescription, globToRegExp, groupByArea} from './lib/describe.mjs';
 import {POLICY_FILE, escapeInvisible, readPolicyAt} from './lib/policy-read.mjs';
-import {awaitStage, endWithoutStatus} from './await-status.mjs';
+import {awaitStage, endWithErrorStatus} from './await-status.mjs';
 import {commentCommand} from './command.mjs';
 import {COMMIT_SHA, MAX_ANNOTATION_CHARS, TITLE, redactor, repositoryIdOf} from './lib/shared.mjs';
 import {annotation, shorten} from './lib/workflow-commands.mjs';
@@ -1036,7 +1036,7 @@ export async function run({
         sendStage,
       });
     } catch (error) {
-      return endWithoutStatus({env, fetchImpl, signalAfter, print}, `await stopped: ${error?.message ?? error}`);
+      return endWithErrorStatus({env, fetchImpl, signalAfter, print}, `await stopped: ${error?.message ?? error}`);
     }
   }
   const {exitCode, outputs} = await sendStage({env, fetchImpl, sleep, now, print});
