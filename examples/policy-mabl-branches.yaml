@@ -1,0 +1,34 @@
+# .mabl/policy.yaml for a team that updates tests on a mabl branch alongside the code. Every setting is
+# described in docs/policy-file.md; see "mabl branches" there.
+version: 1
+
+# When a pull request merges, merge its mabl branch into master. Needs examples/pull-request-merged.yml and a
+# Command Line Interface API key.
+merge_mabl_branches: true
+
+suites:
+  smoke:
+    plan_labels: [smoke]
+
+applications:
+  web:
+    mabl_application: '[application-id]'
+    target:
+      url: 'https://pr-{sha7}.preview.example.com'
+      environment: '[environment-id]'
+      credentials: '[credentials-id]'
+    stages:
+      # Both stages run the pull request's mabl branch, so a test fixed on the branch for this change runs as
+      # fixed. match-pr is the default; it's spelled out here to show where the setting goes.
+      pull_request:
+        mabl_branch: match-pr
+        checks:
+          - kind: impacted
+      merge_queue:
+        mabl_branch: match-pr
+        checks:
+          - kind: suite
+            suite: smoke
+            must_pass: true
+          - kind: impacted
+            must_pass: true

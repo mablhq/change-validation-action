@@ -1,0 +1,53 @@
+# .mabl/policy.yaml for a repository that holds more than one application. A pull request runs only the
+# checks of the applications whose trigger_paths it touches. Every setting is described in docs/policy-file.md.
+version: 1
+
+suites:
+  web-smoke:
+    plan_labels: [web-smoke]
+  admin-smoke:
+    plan_labels: [admin-smoke]
+
+impacted:
+  exclude:
+    test_labels: [quarantine]
+
+applications:
+  web:
+    mabl_application: '[web-application-id]'
+    # The same patterns as a GitHub Actions `paths` filter. A change to shared code reaches both applications.
+    trigger_paths:
+      - 'apps/web/**'
+      - 'packages/**'
+      - '!apps/web/docs/**'
+    # The files mabl treats as this application's when it works out which tests a change affects.
+    analysis_roots: ['apps/web', 'packages']
+    target:
+      url: 'https://web-{sha7}.preview.example.com'
+      environment: '[environment-id]'
+      credentials: '[web-credentials-id]'
+    stages:
+      pull_request:
+        checks:
+          - kind: suite
+            suite: web-smoke
+            must_pass: true
+          - kind: impacted
+            include:
+              suites: [web-smoke]
+  admin:
+    mabl_application: '[admin-application-id]'
+    trigger_paths:
+      - 'apps/admin/**'
+      - 'packages/**'
+    analysis_roots: ['apps/admin', 'packages']
+    target:
+      url: 'https://admin-{sha7}.preview.example.com'
+      environment: '[environment-id]'
+      credentials: '[admin-credentials-id]'
+    stages:
+      pull_request:
+        checks:
+          - kind: suite
+            suite: admin-smoke
+            must_pass: true

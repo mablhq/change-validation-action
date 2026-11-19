@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Docs: the full policy file reference (`docs/policy-file.md`), a README for the policy check, and example policies
+  for a shared staging environment, a repository with more than one application, and mabl branches. The README
+  lists every `outcome` the action can return.
+- Examples: a workflow that tells mabl a pull request merged. The deployed commit example now says its stage's
+  checks need `must_pass`; without it the status reads success before the tests finish.
+
 ## 1.0.0
 
 First release.

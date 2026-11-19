@@ -1,0 +1,31 @@
+# .mabl/policy.yaml for a team without preview deployments: a change isn't deployed anywhere until it merges.
+# Every setting is described in docs/policy-file.md.
+version: 1
+
+suites:
+  smoke:
+    plan_labels: [smoke]
+
+applications:
+  web:
+    mabl_application: '[application-id]'
+    target:
+      # No url: tests run at the environment's own URL.
+      environment: '[environment-id]'
+      credentials: '[credentials-id]'
+    stages:
+      # Each pull request: list the impacted tests for the reviewer, without running them.
+      pull_request:
+        checks:
+          - kind: impacted
+            run: false
+      # After a merge deploys to staging: the smoke suite and the impacted tests must pass. `scope: revision`
+      # makes the stage belong to the deployed commit, so no pull request waits on it.
+      staging:
+        scope: revision
+        checks:
+          - kind: suite
+            suite: smoke
+            must_pass: true
+          - kind: impacted
+            must_pass: true
