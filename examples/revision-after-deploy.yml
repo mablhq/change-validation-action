@@ -1,15 +1,8 @@
 # .github/workflows/mabl-staging.yml
 # After a merge deploys to a shared staging environment, asks mabl to validate the deployed commit's `staging`
 # stage and publishes the result as `mabl-staging`, which a promotion to production can require. The stage
-# needs `scope: revision` in your policy file, for example:
-#
-#   stages:
-#     staging:
-#       scope: revision
-#       checks:
-#         - kind: suite
-#           suite: smoke
-#         - kind: impacted
+# needs `scope: revision` in your policy file, as in examples/policy-shared-staging.yaml. Its checks need
+# `must_pass`: without it nothing holds the status back, and it reads success before the tests finish.
 name: mabl staging
 on:
   push:

@@ -1,0 +1,22 @@
+# .github/workflows/mabl-pull-request-merged.yml
+# Tells mabl a pull request merged. With `merge_mabl_branches: true` in the policy, mabl then merges the pull
+# request's mabl branch into master, as this API key, which must be a Command Line Interface key.
+name: mabl pull request merged
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  mabl:
+    # Fork pull requests get no secrets.
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: mablhq/change-validation-action@v1
+        with:
+          mabl-api-key: ${{ secrets.MABL_API_KEY }}
+          workspace-id: your-workspace-id

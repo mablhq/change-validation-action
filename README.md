@@ -24,10 +24,12 @@ sends the contents of the files your change touches. Don't put secrets in a pull
 
 - A mabl workspace with generative AI features.
 - A mabl API key of the **Command Line Interface** or **Editor** type, stored as an encrypted secret, for example
-  `MABL_API_KEY`. See [managing API keys](https://help.mabl.com/hc/en-us/articles/17776006239764).
+  `MABL_API_KEY`. See [managing API keys](https://help.mabl.com/hc/en-us/articles/17776006239764). Make a key for this
+  workflow, not a personal one. To have mabl merge mabl branches, it must be a Command Line Interface key.
 - Your mabl workspace's ID, which every call names. Workspace IDs aren't secret.
 - A `.mabl/policy.yaml` that names your mabl application, environment and plans, and the stages your workflow
-  asks for. Start from [examples/policy.yaml](examples/policy.yaml).
+  asks for. Start from [examples/policy.yaml](examples/policy.yaml). Every setting is in the
+  [policy file reference](docs/policy-file.md).
 
 ## Quickstart
 
@@ -69,6 +71,18 @@ For a stage that runs after a merge deploys, such as to a shared staging environ
 [examples/revision-after-deploy.yml](examples/revision-after-deploy.yml). To check the policy file on the pull
 requests that change it, see [examples/policy-check.yml](examples/policy-check.yml).
 
+## The policy file
+
+The [policy file reference](docs/policy-file.md) lists every setting, with its default, rules and limits. Example
+policies to start from:
+
+| Policy | For |
+|---|---|
+| [examples/policy.yaml](examples/policy.yaml) | A preview per pull request, and a merge queue that must pass |
+| [examples/policy-shared-staging.yaml](examples/policy-shared-staging.yaml) | No previews: report on the pull request, run after the merge deploys |
+| [examples/policy-monorepo.yaml](examples/policy-monorepo.yaml) | More than one application in a repository |
+| [examples/policy-mabl-branches.yaml](examples/policy-mabl-branches.yaml) | Tests updated on a mabl branch alongside the code |
+
 ## Deployed commits
 
 Most pipelines call the action from their deploy job, or from a `workflow_run` that follows it. These events send
@@ -90,7 +104,7 @@ or the action refuses it. `base-sha` is the commit the environment ran before, w
 | Use | For |
 |---|---|
 | `mablhq/change-validation-action@v1` | The action: send one stage request, and with `await`, wait for the stage's status and publish it as a commit status |
-| `mablhq/change-validation-action/policy@v1` | Check a policy file at a commit and show what changes from another |
+| `mablhq/change-validation-action/policy@v1` | Check a policy file at a commit and show what changes from another. See [policy/README.md](policy/README.md) |
 | `.github/workflows/pull-request.yml` | Reusable: pull request stages, plus a `/mabl` comment that sends the current head again |
 | `.github/workflows/merge-queue.yml` | Reusable: a merge queue stage, awaited and published as a commit status |
 | `.github/workflows/revision.yml` | Reusable: a stage for a deployed commit (`scope: revision` in the policy) |
@@ -117,8 +131,11 @@ or the action refuses it. `base-sha` is the commit the environment ran before, w
 | `api-url` | `https://api.mabl.com` | The mabl api; no other is accepted |
 | `token` | `github.token` | Reads the pull request and the policy file; with `await`, needs `statuses: write`; with `comment`, `pull-requests: write` |
 
-Outputs: `outcome` (`accepted`, `duplicate` or `superseded` when sent), `session-id`, `created`, `agent`,
-`description-source` (`built` or `provided`), and with `await`, `status` (`success` or `failure`).
+Outputs: `outcome`, `session-id`, `created`, `agent`, `description-source` (`built` or `provided`), and with
+`await`, `status` (`success` or `failure`). When the request was sent, `outcome` is `accepted`, `duplicate` or
+`superseded`. Otherwise it says why not: `skipped`, `entry_gone` (a merge queue build the queue dropped),
+`refused`, `feature_disabled`, `change_agent_closed` (validation was turned off for the pull request), another
+error code from mabl, `failed`, or with `await`, `timed_out`.
 
 If change validation is off for the workspace, mabl answers `feature_disabled`: the step passes with a notice and
 nothing is validated. With `await`, the commit status is `failure`, so a gate can't pass on a stage nobody judged.
@@ -161,16 +178,22 @@ the prose.
 - **Nothing to run is a pass**, but only when the analysis succeeded. A stage mabl can't judge, such as one with
   a missing or invalid policy file, never passes.
 - **Forks.** Pull requests from forks get no secrets, so the reusable workflows skip them. If you call the action
-  yourself, skip them too.
+  yourself, skip them too. Dependabot pull requests aren't forks, but they get no repository secrets either: add
+  the key as a Dependabot secret. Skipping them with `github.actor != 'dependabot[bot]'` works, but a skipped job
+  passes a required check.
 - **The policy is read at a commit the pull request's author can't change:** the pull request's base, or the
-  merge group's base. Put `.mabl/policy.yaml` under CODEOWNERS.
+  merge group's base. Put `.mabl/policy.yaml` and the workflow files that call mabl under CODEOWNERS, and turn on
+  "Require review from Code Owners" in your branch rules, or CODEOWNERS enforces nothing.
 - **Outputs are untrusted.** Values from a pull request reach the outputs. Read them through `env:`, never inside
   a `run:` script.
 - **A `Mabl branch: <name>` line** in the pull request's description names the mabl branch its tests live on. A
-  stage whose policy sets `mabl_branch: match-pr` runs that branch's tests while it's open; other stages ignore it.
+  stage that uses `mabl_branch: match-pr`, the default for a pull request stage, runs that branch's tests while it's
+  open; a stage that sets `mabl_branch: master` ignores it.
+  Review the branch's test changes along with the code. See [mabl branches](docs/policy-file.md#mabl-branches).
 - **Merged pull requests.** Run the action on `pull_request` with `types: [closed]` to tell mabl a pull request
-  merged; with `merge_mabl_branches: true` in the policy, mabl then merges the pull request's mabl branch into
-  master. A pull request closed without merging sends nothing.
+  merged, as [examples/pull-request-merged.yml](examples/pull-request-merged.yml) does; with
+  `merge_mabl_branches: true` in the policy, mabl then merges the pull request's mabl branch into master. A pull
+  request closed without merging sends nothing.
 - **Comment commands.** On `issue_comment`, the reusable workflow passes the first line after its trigger word
   (`/mabl` by default) to the pull request's mabl agent as is; the word alone sends the current head again.
 - **Awaiting a deployed commit.** Two runs for the same commit and `status-context` can overlap, and the later
@@ -181,6 +204,9 @@ the prose.
 
 ## Learn more
 
+- [Policy file reference](docs/policy-file.md) and [policy check](policy/README.md)
+- [Change validation in the mabl API reference](https://api.help.mabl.com/reference/sendchangevalidationevent),
+  for every status, reason and error code
 - [How test impact analysis works](https://help.mabl.com/hc/en-us/articles/53552823585044)
 - [Test impact analysis in CI/CD](https://help.mabl.com/hc/en-us/articles/53454030677140)
 
