@@ -29,8 +29,8 @@ const FIND_QUERY =
 const CREATE_MUTATION = 'mutation($subject: ID!, $body: String!) { addComment(input: {subjectId: $subject, body: $body}) { commentEdge { node { id } } } }';
 const UPDATE_MUTATION = 'mutation($id: ID!, $body: String!) { updateIssueComment(input: {id: $id, body: $body}) { issueComment { id } } }';
 
-// `wait` on a pull request's own stage request mabl took, `once` after an awaited merge queue entry's
-// status was published, otherwise null.
+// `wait` on a pull request's own stage request mabl took, `once` after a merged event mabl took or an
+// awaited merge queue entry's status was published, otherwise null.
 export function commentPlan({env, payload}) {
   if (String(env.CHANGE_VALIDATION_COMMENT ?? '').trim().toLowerCase() !== 'true' || !/^[1-9][0-9]*$/.test(String(env.PULL_REQUEST_NUMBER ?? ''))) {
     return null;
@@ -39,7 +39,10 @@ export function commentPlan({env, payload}) {
   if (env.CHANGE_VALIDATION_AWAIT === 'true') {
     return eventName === 'merge_group' && String(env.CHANGE_VALIDATION_STATUS ?? '') !== '' ? 'once' : null;
   }
-  return eventName === 'pull_request' && payload?.action !== 'closed' && TAKEN.has(env.CHANGE_VALIDATION_OUTCOME) ? 'wait' : null;
+  if (eventName !== 'pull_request' || !TAKEN.has(env.CHANGE_VALIDATION_OUTCOME)) {
+    return null;
+  }
+  return payload?.action === 'closed' ? 'once' : 'wait';
 }
 
 // The mabl agent's session_id on a comment's data line, or null. A workspace has one agent per pull

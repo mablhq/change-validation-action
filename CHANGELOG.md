@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- On a merged pull request, the action logs what became of its mabl branch: `merged`, `nothing_to_merge`,
+  `not_open` and `left` as notices, and `diverged` and `failed` as errors that fail the step, naming the branch
+  and, for `diverged`, the tests and flows master moved past. The pull request has already merged, so the failure
+  blocks nothing; it tells someone to finish the merge by hand in mabl. The outcome comes from `landed` in mabl's
+  answer to the merged event.
+- With `comment: true`, a merged pull request mabl took updates the comment once, so it shows the branch's
+  outcome. The comment mabl renders now also names the mabl branch each stage's tests run on.
+
 ## 1.0.1
 
 - Docs: the full policy file reference (`docs/policy-file.md`), a README for the policy check, and example policies

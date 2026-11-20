@@ -457,6 +457,120 @@ describe('a merged pull request', () => {
     });
   }
 
+  const mergedAnswer = (event, landed) => json(200, {session_id: 's1-as', created: false, event, ...(landed === undefined ? {} : {landed})});
+  const landedWith = (...branches) => ({merge_commit_sha: MERGE, merge_mabl_branches: true, branches});
+  const annotations = (lines, level) => lines.filter((line) => line.startsWith(`::${level} `)).map((line) => line.slice(line.indexOf('::', 2) + 2));
+
+  for (const [outcome, message] of [
+    ['merged', 'mabl branch feature-x: merged into master'],
+    ['nothing_to_merge', 'mabl branch feature-x: nothing to merge into master'],
+    ['not_open', "mabl branch feature-x: not merged, it doesn't exist, is already merged or isn't a working branch"],
+    ['left', "mabl branch feature-x: left open, the policy doesn't set merge_mabl_branches"],
+  ]) {
+    it(`logs a ${outcome} mabl branch as a notice and passes`, async () => {
+      const stubbed = stub({mabl: [mergedAnswer('accepted', landedWith({name: 'feature-x', outcome}))]});
+      const {exitCode, outputs, lines} = await runWith('pull_request', closedEvent(), stubbed);
+
+      assert.equal(exitCode, 0);
+      assert.equal(outputs.outcome, 'accepted');
+      assert.deepEqual(annotations(lines, 'notice'), ['merged: accepted (s1-as)', message]);
+      assert.deepEqual(annotations(lines, 'error'), []);
+    });
+  }
+
+  it('fails on a diverged mabl branch, naming the branch and the tests and flows master moved past', async () => {
+    const stubbed = stub({
+      mabl: [
+        mergedAnswer(
+          'accepted',
+          landedWith({
+            name: 'feature-x',
+            outcome: 'diverged',
+            diverged_entities: [
+              {id: 'checkout-j', type: 'test', name: 'Checkout'},
+              {id: 'login-f', type: 'flow', name: 'Log in'},
+            ],
+          }),
+        ),
+      ],
+    });
+    const {exitCode, outputs, lines} = await runWith('pull_request', closedEvent(), stubbed);
+
+    assert.equal(exitCode, 1);
+    assert.equal(outputs.outcome, 'accepted');
+    assert.deepEqual(annotations(lines, 'error'), [
+      'mabl branch feature-x: not merged, master changed after the branch for test "Checkout" and flow "Log in". Merge it into master by hand in mabl',
+    ]);
+    assert.ok(lines.includes('mabl branch feature-x: master moved past test "Checkout" (checkout-j)'));
+    assert.ok(lines.includes('mabl branch feature-x: master moved past flow "Log in" (login-f)'));
+  });
+
+  it('fails on a failed merge, and again on a repeat of the event, which answers from the record', async () => {
+    for (const event of ['accepted', 'duplicate']) {
+      const stubbed = stub({mabl: [mergedAnswer(event, landedWith({name: 'feature-x', outcome: 'failed'}))]});
+      const {exitCode, outputs, lines} = await runWith('pull_request', closedEvent(), stubbed);
+
+      assert.equal(exitCode, 1);
+      assert.equal(outputs.outcome, event);
+      assert.deepEqual(annotations(lines, 'error'), [
+        'mabl branch feature-x: the merge into master failed, and the branch may be partly merged. Check it and finish the merge by hand in mabl',
+      ]);
+    }
+  });
+
+  it('names ten of a diverged branch\'s tests and flows in the error and lists every one in the log', async () => {
+    const entities = Array.from({length: 13}, (_, index) => ({id: `t${index}-j`, type: 'test', name: `Test ${index}`}));
+    const stubbed = stub({mabl: [mergedAnswer('accepted', landedWith({name: 'feature-x', outcome: 'diverged', diverged_entities: entities}))]});
+    const {exitCode, lines} = await runWith('pull_request', closedEvent(), stubbed);
+
+    assert.equal(exitCode, 1);
+    const [error] = annotations(lines, 'error');
+    assert.match(error, /test "Test 9" and 3 more\. Merge it into master by hand in mabl$/);
+    assert.ok(!error.includes('Test 10'), error);
+    assert.equal(lines.filter((line) => line.startsWith('mabl branch feature-x: master moved past ')).length, 13);
+  });
+
+  it("can't be made to forge a workflow command by a branch, test or flow name", async () => {
+    const forged = 'x\n::error::forged\r\n%0A \u202e';
+    const stubbed = stub({
+      mabl: [mergedAnswer('accepted', landedWith({name: forged, outcome: 'diverged', diverged_entities: [{id: forged, type: 'test', name: forged}]}))],
+    });
+    const {exitCode, lines} = await runWith('pull_request', closedEvent(), stubbed);
+
+    assert.equal(exitCode, 1);
+    assert.equal(lines.filter((line) => line.startsWith('::error')).length, 1);
+    for (const line of lines) {
+      assert.ok(!/[\r\n\u202e]/.test(line), JSON.stringify(line));
+    }
+  });
+
+  it('passes with a notice when no stage ran on a mabl branch, and with a log line when mabl names no outcome', async () => {
+    const none = await runWith('pull_request', closedEvent(), stub({mabl: [mergedAnswer('accepted', landedWith())]}));
+    assert.equal(none.exitCode, 0);
+    assert.deepEqual(annotations(none.lines, 'notice').slice(1), ["no mabl branch to merge: the pull request's tests didn't run on one"]);
+
+    const older = await runWith('pull_request', closedEvent(), stub({mabl: [mergedAnswer('accepted')]}));
+    assert.equal(older.exitCode, 0);
+    assert.ok(older.lines.includes("mabl's answer doesn't say what became of the pull request's mabl branch"));
+  });
+
+  it("reports nothing about a branch for a superseded merge, which is another merge commit's", async () => {
+    const stubbed = stub({mabl: [mergedAnswer('superseded', landedWith({name: 'feature-x', outcome: 'diverged'}))]});
+    const {exitCode, outputs, lines} = await runWith('pull_request', closedEvent(), stubbed);
+
+    assert.equal(exitCode, 0);
+    assert.equal(outputs.outcome, 'superseded');
+    assert.ok(!lines.some((line) => line.includes('mabl branch')), lines.join('\n'));
+  });
+
+  it('keeps an outcome it does not know as a notice, so a newer one never fails the step', async () => {
+    const stubbed = stub({mabl: [mergedAnswer('accepted', landedWith({name: 'feature-x', outcome: 'queued'}))]});
+    const {exitCode, lines} = await runWith('pull_request', closedEvent(), stubbed);
+
+    assert.equal(exitCode, 0);
+    assert.ok(annotations(lines, 'notice').includes('mabl branch feature-x: queued'));
+  });
+
   it("is quiet when the pull request never had a mabl agent", async () => {
     const stubbed = stub({mabl: [json(404, {code: 404, error_code: 'no_change_agent', message: 'no agent'})]});
     const {exitCode, outputs} = await runWith('pull_request', closedEvent(), stubbed);

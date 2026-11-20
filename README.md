@@ -157,6 +157,8 @@ stage's checks are going. It posts the markdown mabl renders, as is.
   to `comment-wait-minutes`, reading the report every 20 seconds until each application the change reaches has its
   analysis. Give the job `pull-requests: write` and a `timeout-minutes` of at least `comment-wait-minutes` + 5.
 - **On an awaited merge queue entry**, it updates the comment once, after the status is published.
+- **On a merged pull request** mabl took (`accepted` or `duplicate`), it updates the comment once, so it shows
+  what became of the pull request's mabl branch.
 - **Never on** comment commands, deployed commits, or a request mabl didn't take.
 
 The comment can't change the request's outcome, outputs or commit status: a failed report read or post is a log
@@ -176,6 +178,30 @@ the prose.
 - **Only people with write access should start a run that costs credits.** The reusable workflow takes comment
   commands only from owners, members and collaborators, and the action then checks the commenter has write access;
   keep the first check if you call the action yourself.
+
+## When a pull request merges
+
+mabl answers the merged event with what became of the pull request's mabl branch, and the action logs it:
+
+| Branch outcome | Means | The step |
+|---|---|---|
+| `merged` | Merged into master | Passes, with a notice |
+| `nothing_to_merge` | Open, with no edit to merge | Passes, with a notice |
+| `not_open` | It doesn't exist, is already merged, or isn't a working branch | Passes, with a notice |
+| `left` | The policy doesn't set `merge_mabl_branches`, so mabl left it open | Passes, with a notice |
+| `diverged` | master changed after the branch for a test or flow, so mabl left it open | **Fails**, naming the branch and those tests and flows |
+| `failed` | The merge failed, and the branch may be partly merged | **Fails**, naming the branch |
+
+When no stage ran on a mabl branch there is nothing to merge, and the step passes with a notice saying so.
+
+mabl merges fast-forward only and never forces a merge, so a failed step means a person has to finish it: open the
+branch in mabl and merge it into master by hand. The pull request has already merged, so the failure can't block
+anything; it's there so someone sees it. `outcome` is still the event's, such as `accepted`. Running the job again
+doesn't merge again: mabl answers `duplicate` with the outcome it recorded, so the step fails the same way even
+after someone merged the branch by hand.
+
+With `comment: true`, the pull request's comment shows the same outcome, and before the merge it names the mabl
+branch each stage's tests run on.
 
 ## Comment commands
 
@@ -226,7 +252,7 @@ on:
 - **Merged pull requests.** Run the action on `pull_request` with `types: [closed]` to tell mabl a pull request
   merged, as [examples/pull-request-merged.yml](examples/pull-request-merged.yml) does; with
   `merge_mabl_branches: true` in the policy, mabl then merges the pull request's mabl branch into master. A pull
-  request closed without merging sends nothing.
+  request closed without merging sends nothing. See [When a pull request merges](#when-a-pull-request-merges).
 - **Awaiting a deployed commit.** Two runs for the same commit and `status-context` can overlap, and the later
   write wins. The reusable `deployed-commit.yml` makes them take turns; if you call the action directly, give
   those runs a shared `concurrency` group with `cancel-in-progress: false`.

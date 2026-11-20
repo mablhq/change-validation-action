@@ -10,6 +10,7 @@ import {buildDescription, globToRegExp, groupByArea} from './lib/describe.mjs';
 import {POLICY_FILE, escapeInvisible, readPolicyAt} from './lib/policy-read.mjs';
 import {awaitStage, endWithErrorStatus} from './await-status.mjs';
 import {commentCommand} from './command.mjs';
+import {mergeOutcome} from './merge-outcome.mjs';
 import {COMMIT_SHA, MAX_ANNOTATION_CHARS, TITLE, redactor, repositoryIdOf} from './lib/shared.mjs';
 import {annotation, shorten} from './lib/workflow-commands.mjs';
 import {REVISION_EVENTS, revisionHead} from './revision.mjs';
@@ -27,6 +28,7 @@ const WRITE_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
 export const RETRY_DELAYS_MS = [2_000, 5_000, 15_000];
 // Answers that end the run without failing it.
 const QUIET_ERRORS = new Set(['feature_disabled', 'change_agent_closed', 'no_change_agent']);
+const TAKEN = new Set(['accepted', 'duplicate']);
 const REQUEST_TIMEOUT_MS = 60_000;
 const GITHUB_TIMEOUT_MS = 30_000;
 const RESOLVE_TIMEOUT_MS = 30_000;
@@ -1131,7 +1133,15 @@ async function sendStage({env, fetchImpl, sleep, now = Date.now, print, onSendin
     const result = answer.body ?? {};
     const what = {command: 'command', 'pull_request.merged': 'merged'}[body.event.kind] ?? `stage ${body.event.stage}`;
     report('notice', `${what}: ${result.event}${result.agent ? `, agent ${result.agent}` : ''} (${result.session_id})`);
-    return finish(String(result.event ?? ''), 0, {
+    let exitCode = 0;
+    // A superseded merged event is another merge commit's, so its branch isn't this one's to report.
+    if (body.event.kind === 'pull_request.merged' && TAKEN.has(result.event)) {
+      const landed = mergeOutcome(result.landed);
+      landed.annotations.forEach(({level, message}) => report(level, message));
+      landed.log.forEach((line) => print(redact(escapeInvisible(line))));
+      exitCode = landed.failed ? 1 : 0;
+    }
+    return finish(String(result.event ?? ''), exitCode, {
       ...described,
       'session-id': String(result.session_id ?? ''),
       created: String(result.created === true),

@@ -323,6 +323,22 @@ describe('a token that cannot read or write the comments, as on a fork', () => {
   }
 });
 
+describe('the comment on a merged pull request', () => {
+  it("reads and posts once after mabl took the merge, whether or not every analysis finished, so it shows the branch's outcome", async () => {
+    for (const outcome of ['accepted', 'duplicate']) {
+      const merged = reportOf({text: 'mabl branch feature-x: merged'});
+      const stubbed = stub({reports: [json(200, merged)], comments: [{id: 'IC_1', body: bodyOf('before the merge'), author: OURS}]});
+      await step(stubbed, {CHANGE_VALIDATION_OUTCOME: outcome}, {action: 'closed', pull_request: {merged: true}});
+      assert.equal(stubbed.reads().length, 1);
+      assert.equal(stubbed.updates().length, 1);
+      assert.deepEqual(
+        stubbed.store.map((comment) => comment.body),
+        [bodyOf('mabl branch feature-x: merged')],
+      );
+    }
+  });
+});
+
 describe('the comment on a merge queue entry', () => {
   it('reads and posts once after a published verdict', async () => {
     for (const status of ['success', 'failure']) {
@@ -415,12 +431,14 @@ describe('the comment on a merge queue entry', () => {
 });
 
 describe('when the comment step posts nothing', () => {
-  it('is off unless comment is true, and off for commands, merged pull requests and requests mabl did not take', async () => {
+  it('is off unless comment is true, and off for commands, pull requests closed without merging and requests mabl did not take', async () => {
     for (const [env, payload] of [
       [{CHANGE_VALIDATION_COMMENT: ''}, undefined],
       [{CHANGE_VALIDATION_COMMENT: 'false'}, undefined],
       [{GITHUB_EVENT_NAME: 'issue_comment'}, {action: 'created'}],
-      [{}, {action: 'closed'}],
+      [{CHANGE_VALIDATION_OUTCOME: 'skipped'}, {action: 'closed'}],
+      [{CHANGE_VALIDATION_OUTCOME: 'superseded'}, {action: 'closed'}],
+      [{CHANGE_VALIDATION_OUTCOME: 'no_change_agent'}, {action: 'closed'}],
       [{CHANGE_VALIDATION_OUTCOME: 'superseded'}, undefined],
       [{CHANGE_VALIDATION_OUTCOME: 'invalid_request'}, undefined],
       [{GITHUB_EVENT_NAME: 'merge_group'}, undefined],

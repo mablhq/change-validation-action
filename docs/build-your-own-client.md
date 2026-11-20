@@ -133,7 +133,11 @@ mabl then merges the pull request's mabl branch into master. Without it, the eve
   first one's policy didn't merge branches and this one's does. An event for another merge commit is `superseded`.
 - A pull request closed without merging sends nothing.
 
-The status then has a `landed` field with the merge commit and what happened to the branch.
+The answer to an `accepted` or `duplicate` merged event has a `landed` field with the merge commit and what
+happened to the branch, and so does the status from then on. Each entry of `landed.branches` has the branch's
+`name` and `outcome`, and a `diverged` one lists `diverged_entities`, the tests and flows master moved past.
+`diverged` and `failed` need a person to finish the merge in mabl, so make them visible: this action fails its
+step on them. An older api may answer without `landed`; read the status for it then.
 
 ## Ordering and retries
 
