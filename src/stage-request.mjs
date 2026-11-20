@@ -799,6 +799,16 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
   }
 
   const headSha = queued ? queued.head_sha : pr.head.sha;
+  // Read on each pass, so a head that moved while the files were listed is checked again.
+  const expectedHead = queued ? '' : String(env.CHANGE_VALIDATION_EXPECTED_HEAD_SHA ?? '').trim().toLowerCase();
+  if (expectedHead) {
+    if (!COMMIT_SHA.test(expectedHead)) {
+      throw new Error(`expected-head-sha has to be a 40-character commit sha, got ${JSON.stringify(expectedHead)}`);
+    }
+    if (expectedHead !== String(headSha).toLowerCase()) {
+      return {skip: `pull request #${number}'s head is ${headSha}, not the expected ${expectedHead}`};
+    }
+  }
   const provided = String(env.CHANGE_DESCRIPTION ?? '').trim();
   if (provided) {
     const describedHead = String(env.CHANGE_DESCRIPTION_HEAD_SHA ?? '').trim().toLowerCase();
@@ -1021,6 +1031,14 @@ export async function run({
   signalAfter = (ms) => AbortSignal.timeout(ms),
   print = (line) => process.stdout.write(`${line}\n`),
 } = {}) {
+  const sendInput = String(env.CHANGE_VALIDATION_SEND ?? '').trim();
+  if (sendInput !== '' && sendInput !== 'true' && sendInput !== 'false') {
+    print(annotation('error', `not sent: send has to be 'true' or 'false', got ${JSON.stringify(shorten(escapeInvisible(sendInput), 100))}`, {title: TITLE}));
+    return {exitCode: 1, outputs: {...NO_OUTPUTS, outcome: 'failed'}};
+  }
+  if (sendInput === 'false') {
+    return commentOnly({env, fetchImpl, print});
+  }
   if (env.CHANGE_VALIDATION_AWAIT === 'true') {
     const invokedAt = now();
     try {
@@ -1041,6 +1059,90 @@ export async function run({
   }
   const {exitCode, outputs} = await sendStage({env, fetchImpl, sleep, now, print});
   return {exitCode, outputs};
+}
+
+// send: 'false' sends nothing: it names the pull request whose comment comment.mjs then keeps current,
+// with the checks a stage request from the same event would make first.
+async function commentOnly({env, fetchImpl, print}) {
+  const redact = redactor(env);
+  const report = (level, message) => print(annotation(level, shorten(escapeInvisible(redact(message)), MAX_ANNOTATION_CHARS), {title: TITLE}));
+  const finish = (outcome, exitCode, number = '') => ({exitCode, outputs: {...NO_OUTPUTS, outcome, 'pull-request-number': number}});
+  const fail = (message) => {
+    report('error', `not sent: ${message}`);
+    return finish('failed', 1);
+  };
+  if (env.CHANGE_VALIDATION_AWAIT === 'true') {
+    return fail("send: 'false' sends no stage request, so there is nothing to await");
+  }
+  if (String(env.CHANGE_VALIDATION_COMMENT ?? '').trim().toLowerCase() !== 'true') {
+    return fail("send: 'false' only keeps the comment current, so it needs comment: 'true'");
+  }
+  if (!apiUrlOf(env)) {
+    return fail(`api-url has to be ${DEFAULT_API_URL}, got ${JSON.stringify(String(env.MABL_API_URL ?? ''))}`);
+  }
+  let payload;
+  try {
+    payload = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH ?? '', 'utf8'));
+  } catch (error) {
+    return fail(`the event can't be read: ${error?.message ?? error}`);
+  }
+  const eventName = env.GITHUB_EVENT_NAME;
+  let number;
+  try {
+    if (eventName === 'pull_request') {
+      if (payload.action === 'closed') {
+        report('notice', "not sent: send: 'false' keeps no comment on a closed pull request");
+        return finish('skipped', 0);
+      }
+      if (isFork(payload.pull_request)) {
+        throw new Refusal(`pull request #${payload.pull_request?.number} comes from a fork, or one that can't be told apart from a fork`);
+      }
+      number = payload.pull_request?.number;
+    } else if (eventName === 'issue_comment') {
+      if (!payload.issue?.pull_request) {
+        report('notice', 'not sent: the comment is not on a pull request');
+        return finish('skipped', 0);
+      }
+      if (payload.action !== 'created') {
+        report('notice', `not sent: issue_comment ${payload.action} is not taken`);
+        return finish('skipped', 0);
+      }
+      if (commentCommand({env, payload}) === null) {
+        report('notice', 'not sent: the comment does not start with the trigger word');
+        return finish('skipped', 0);
+      }
+      const association = payload.comment?.author_association;
+      if (!TRUSTED_ASSOCIATIONS.has(association)) {
+        throw new Refusal(`comments are taken only from an owner, member or collaborator; the commenter is ${association ?? 'unknown'}`);
+      }
+      const repository = env.GITHUB_REPOSITORY ?? '';
+      const githubApiUrl = (env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, '');
+      const login = payload.comment?.user?.login;
+      if (!login || !(await commenterCanWrite({githubApiUrl, repository, login, token: env.GH_TOKEN ?? '', fetchImpl}))) {
+        throw new Refusal(`comments are taken only from someone with write access to ${repository}; ${login ?? 'the commenter'} has none`);
+      }
+      number = payload.issue.number;
+    } else {
+      return fail(`send: 'false' runs on pull_request and issue_comment events, not ${eventName || 'none'}`);
+    }
+  } catch (error) {
+    if (error instanceof Refusal) {
+      report('notice', `not sent: ${error.message}`);
+      return finish('refused', 0);
+    }
+    return fail(error?.message ?? error);
+  }
+  if (!Number.isInteger(number) || number < 1) {
+    return fail('the event names no pull request');
+  }
+  if (!env.MABL_API_KEY) {
+    return fail('mabl-api-key is required');
+  }
+  if (!String(env.MABL_WORKSPACE_ID ?? '').trim()) {
+    return fail('workspace-id is required: the id of the mabl workspace to validate in');
+  }
+  report('notice', `pull request #${number}: no stage request sent (send: 'false'); keeping its comment current`);
+  return finish('comment_only', 0, String(number));
 }
 
 // One request, as `run` sends it. Also returns the body sent (or built) and the last notice or error

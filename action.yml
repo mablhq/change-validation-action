@@ -35,6 +35,10 @@ inputs:
     description: 'The head commit change-description was written for; required with it. If the pull request has moved on, nothing is sent'
     required: false
     default: ''
+  expected-head-sha:
+    description: "On pull_request and issue_comment, the pull request head the caller checked, such as the commit its preview was built from. If the pull request's head is another commit when the request would be sent, nothing is sent and outcome is skipped. Ignored on merge_group, deployed commits, a merged pull request and a command"
+    required: false
+    default: ''
   head-sha:
     description: "On a deployed commit, the commit; when empty, a deployment_status event's sha or a workflow_run's head_sha, else the run's GITHUB_SHA. It must be on the default branch, unless a branch push just pushed it. Ignored on pull_request, issue_comment and merge_group"
     required: false
@@ -47,6 +51,10 @@ inputs:
     description: "'true' to run this stage request dry: mabl reports what would run and never starts a test run"
     required: false
     default: 'false'
+  send:
+    description: "'false' to send no stage request and only keep the pull request's comment current: on pull_request and issue_comment, with comment 'true', the action reads mabl's report of the pull request and keeps its comment current for up to comment-wait-minutes, as after a stage request; outcome is comment_only. Not with await"
+    required: false
+    default: 'true'
   file:
     description: "The policy file's path in the repository"
     required: false
@@ -64,11 +72,11 @@ inputs:
     required: false
     default: '40'
   comment:
-    description: "'true' to keep one comment on the pull request with mabl's report of the change, which can't change the request's outcome, outputs or status: kept current while the analyses run after a pull_request stage request, and updated once after an awaited merge queue entry's status is published"
+    description: "'true' to keep one comment on the pull request with mabl's report of the change, which can't change the request's outcome, outputs or status: kept current while the analyses run after a pull_request stage request or with send 'false', and updated once after an awaited merge queue entry's status is published"
     required: false
     default: 'false'
   comment-wait-minutes:
-    description: "With comment, how long after a pull_request stage request to keep the comment current; set the job's timeout-minutes to at least this + 5"
+    description: "With comment, how long after a pull_request stage request, or from the start with send 'false', to keep the comment current; set the job's timeout-minutes to at least this + 5"
     required: false
     default: '15'
   token:
@@ -77,7 +85,7 @@ inputs:
     default: ${{ github.token }}
 outputs:
   outcome:
-    description: "accepted, duplicate or superseded when sent; skipped, entry_gone (a merge queue build the queue dropped), refused, feature_disabled, change_agent_closed (validation was turned off for this pull request), another error code, or failed otherwise; with await, also timed_out when the time ran out just before sending"
+    description: "accepted, duplicate or superseded when sent; comment_only with send 'false'; skipped, entry_gone (a merge queue build the queue dropped), refused, feature_disabled, change_agent_closed (validation was turned off for this pull request), another error code, or failed otherwise; with await, also timed_out when the time ran out just before sending"
   session-id:
     description: "The mabl agent session for the pull request or commit; empty unless sent"
   created:

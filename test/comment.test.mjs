@@ -437,6 +437,79 @@ describe('when the comment step posts nothing', () => {
   });
 });
 
+describe("the comment with send 'false'", () => {
+  const REFRESH = {CHANGE_VALIDATION_SEND: 'false', CHANGE_VALIDATION_OUTCOME: 'comment_only'};
+
+  for (const [eventName, payload] of [
+    ['pull_request', {action: 'synchronize'}],
+    ['issue_comment', {action: 'created', issue: {number: 7, pull_request: {url: 'x'}}}],
+  ]) {
+    it(`keeps the comment current on ${eventName}, as after a stage request`, async () => {
+      const stubbed = stub({
+        reports: [json(200, reportOf({text: 'analysing'})), json(200, reportOf({analysed: [true], text: 'done'}))],
+        comments: [{id: 'IC_1', body: bodyOf('older', 's1-as'), author: OURS}],
+      });
+      const lines = await step(stubbed, {...REFRESH, GITHUB_EVENT_NAME: eventName}, payload);
+
+      assert.equal(stubbed.reads().length, 2);
+      assert.equal(stubbed.creates().length, 0);
+      assert.equal(stubbed.updates().length, 2);
+      assert.equal(stubbed.store[0].body, bodyOf('done', 's1-as'));
+      assert.deepEqual(stubbed.reads()[0].body, {
+        workspace_id: 'ws-w',
+        reference: {type: 'pull_request', id: 'github.com/org/repo#7'},
+        trusted_providers: 'caller',
+        format: 'markdown',
+      });
+      assert.deepEqual(warnings(lines), []);
+    });
+  }
+
+  it('stops at comment-wait-minutes', async () => {
+    const stubbed = stub({reports: [json(200, reportOf({text: 'analysing'}))]});
+    await step(stubbed, {...REFRESH, COMMENT_WAIT_MINUTES: '2'});
+
+    assert.equal(stubbed.reads().length, 1 + (2 * MINUTE) / POLL_INTERVAL_MS);
+  });
+
+  it('logs, without a warning, when mabl has no agent for the pull request yet', async () => {
+    const stubbed = stub({reports: [json(404, {error_code: 'no_change_agent', message: 'no agent'})]});
+    const lines = await step(stubbed, REFRESH);
+
+    assert.equal(stubbed.reads().length, 1);
+    assert.deepEqual(warnings(lines), []);
+    assert.ok(lines.includes("pull request #7's comment: not posted, mabl has no report for it yet"));
+  });
+
+  it('still warns on any other 4xx', async () => {
+    const stubbed = stub({reports: [json(403, {error_code: 'forbidden', message: 'no'})]});
+    const lines = await step(stubbed, REFRESH);
+
+    assert.equal(warnings(lines).length, 1);
+  });
+
+  it('reads nothing when the run did not name a pull request to refresh, or on another event', async () => {
+    for (const env of [
+      {...REFRESH, CHANGE_VALIDATION_OUTCOME: 'refused'},
+      {...REFRESH, CHANGE_VALIDATION_OUTCOME: 'failed'},
+      {...REFRESH, GITHUB_EVENT_NAME: 'merge_group'},
+      {...REFRESH, CHANGE_VALIDATION_COMMENT: 'false'},
+    ]) {
+      const stubbed = stub();
+      await step(stubbed, env);
+      assert.equal(stubbed.calls.length, 0, JSON.stringify(env));
+    }
+  });
+
+  it('leaves a sent issue_comment request without a comment wait, as before', async () => {
+    for (const send of ['', 'true']) {
+      const stubbed = stub();
+      await step(stubbed, {GITHUB_EVENT_NAME: 'issue_comment', CHANGE_VALIDATION_SEND: send}, {action: 'created'});
+      assert.equal(stubbed.calls.length, 0, send);
+    }
+  });
+});
+
 describe('what the step sends and prints', () => {
   it("escapes line breaks and invisible characters in mabl's answers, so no answer can forge a workflow command", async () => {
     const forged = `x\n::error::forged\r\n%0A \u202e`;

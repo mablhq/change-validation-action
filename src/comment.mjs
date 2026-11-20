@@ -15,6 +15,8 @@ export const MARKER = '<!-- mabl-change-validation -->';
 const DATA_PREFIX = '<!-- mabl-change-validation-data ';
 const DATA_SUFFIX = ' -->';
 export const POLL_INTERVAL_MS = 20_000;
+const NO_CHANGE_AGENT = 'no_change_agent';
+const refreshOnly = (env) => String(env.CHANGE_VALIDATION_SEND ?? '').trim() === 'false';
 const DEFAULT_WAIT_MINUTES = 15;
 const REQUEST_TIMEOUT_MS = 30_000;
 const COMMENTS_PER_PAGE = 100;
@@ -29,13 +31,16 @@ const FIND_QUERY =
 const CREATE_MUTATION = 'mutation($subject: ID!, $body: String!) { addComment(input: {subjectId: $subject, body: $body}) { commentEdge { node { id } } } }';
 const UPDATE_MUTATION = 'mutation($id: ID!, $body: String!) { updateIssueComment(input: {id: $id, body: $body}) { issueComment { id } } }';
 
-// `wait` on a pull request's own stage request mabl took, `once` after an awaited merge queue entry's
-// status was published, otherwise null.
+// `wait` on a pull request's own stage request mabl took, or on a pull request or comment event with
+// send: 'false'; `once` after an awaited merge queue entry's status was published; otherwise null.
 export function commentPlan({env, payload}) {
   if (String(env.CHANGE_VALIDATION_COMMENT ?? '').trim().toLowerCase() !== 'true' || !/^[1-9][0-9]*$/.test(String(env.PULL_REQUEST_NUMBER ?? ''))) {
     return null;
   }
   const eventName = env.GITHUB_EVENT_NAME;
+  if (refreshOnly(env)) {
+    return env.CHANGE_VALIDATION_OUTCOME === 'comment_only' && (eventName === 'pull_request' || eventName === 'issue_comment') ? 'wait' : null;
+  }
   if (env.CHANGE_VALIDATION_AWAIT === 'true') {
     return eventName === 'merge_group' && String(env.CHANGE_VALIDATION_STATUS ?? '') !== '' ? 'once' : null;
   }
@@ -209,6 +214,11 @@ export async function main({env = process.env, fetchImpl = fetch, sleep = (ms) =
     const answer = await readReport({apiUrl, apiKey, request, fetchImpl});
     const ok = answer.status >= 200 && answer.status < 300;
     const reason = ok ? unreadableReason(answer.body) : null;
+    // Nothing to refresh: mabl has no agent for this pull request yet.
+    if (refreshOnly(env) && answer.status === 404 && answer.body?.error_code === NO_CHANGE_AGENT) {
+      log(`${commentLabel}: not posted, mabl has no report for it yet`);
+      return;
+    }
     if (answer.status >= 400 && answer.status < 500 && answer.status !== 429) {
       warn(`${commentLabel} not posted: mabl's report read answered ${describeAnswer(answer)}`);
       return;
