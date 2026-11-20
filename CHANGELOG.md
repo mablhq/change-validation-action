@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Docs: a policy `target` takes `api_url`, the address API tests run against, with `{sha7}` like `url`. Use it
+  when API tests should reach a preview deployment per commit instead of the environment's own API URL.
+
 ## 1.0.1
 
 - Docs: the full policy file reference (`docs/policy-file.md`), a README for the policy check, and example policies

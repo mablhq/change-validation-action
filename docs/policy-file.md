@@ -163,10 +163,11 @@ field at a time.
 | Key | Type | Description |
 |---|---|---|
 | `url` | URL | The address tests run against. Without one, tests run at the environment's own URL, such as a shared QA or staging environment. |
+| `api_url` | URL | The address API tests run against. Without one, API tests run at the environment's own API URL. It applies to every plan the stage runs. |
 | `environment` | ID | The mabl environment the tests run in. A stage that runs any test must have one, and the application must have a URL in that environment. |
 | `credentials` | ID | The mabl credentials tests log in with, unless `logins_from` gives a test its plan's credentials. |
 
-A `url` must:
+A `url` or `api_url` must:
 
 - Start with `https://` and name a host.
 - Use only printable ASCII characters, with no spaces and none of these characters: `` ` `` `<` `>` `(` `)` `[`
