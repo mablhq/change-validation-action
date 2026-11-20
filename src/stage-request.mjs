@@ -765,6 +765,11 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
   if (!Number.isInteger(number) || number < 1) {
     throw new Error('the event names no pull request');
   }
+  // Where expected-head-sha applies: a pull request's own stage request, not a command or a queue entry.
+  const expectedHead = queued || kind === 'command' ? '' : String(env.CHANGE_VALIDATION_EXPECTED_HEAD_SHA ?? '').trim().toLowerCase();
+  if (!queued && kind !== 'command' && !expectedHead && String(env.CHANGE_VALIDATION_REQUIRE_EXPECTED_HEAD ?? '').trim() === 'true') {
+    throw new Error('require-expected-head is true, but expected-head-sha is empty');
+  }
 
   const repository = env.GITHUB_REPOSITORY ?? '';
   const githubApiUrl = (env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, '');
@@ -799,15 +804,10 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
   }
 
   const headSha = queued ? queued.head_sha : pr.head.sha;
-  // Read on each pass, so a head that moved while the files were listed is checked again.
-  const expectedHead = queued ? '' : String(env.CHANGE_VALIDATION_EXPECTED_HEAD_SHA ?? '').trim().toLowerCase();
-  if (expectedHead) {
-    if (!COMMIT_SHA.test(expectedHead)) {
-      throw new Error(`expected-head-sha has to be a 40-character commit sha, got ${JSON.stringify(expectedHead)}`);
-    }
-    if (expectedHead !== String(headSha).toLowerCase()) {
-      return {skip: `pull request #${number}'s head is ${headSha}, not the expected ${expectedHead}`};
-    }
+  // Checked on each pass, so a head that moved while the files were listed is checked again. run()
+  // has already checked its format.
+  if (expectedHead && expectedHead !== String(headSha).toLowerCase()) {
+    return {skip: `pull request #${number}'s head is ${headSha}, not the expected ${expectedHead}`};
   }
   const provided = String(env.CHANGE_DESCRIPTION ?? '').trim();
   if (provided) {
@@ -1031,12 +1031,31 @@ export async function run({
   signalAfter = (ms) => AbortSignal.timeout(ms),
   print = (line) => process.stdout.write(`${line}\n`),
 } = {}) {
+  // Inputs no path may ignore. With await, an error status is published, as for any input it can't use.
+  const inputError = (message) => {
+    if (env.CHANGE_VALIDATION_AWAIT === 'true') {
+      return endWithErrorStatus({env, fetchImpl, signalAfter, print}, `not sent: ${message}`);
+    }
+    print(annotation('error', shorten(escapeInvisible(redactor(env)(`not sent: ${message}`)), MAX_ANNOTATION_CHARS), {title: TITLE}));
+    return {exitCode: 1, outputs: {...NO_OUTPUTS, outcome: 'failed'}};
+  };
+  const quoted = (value) => JSON.stringify(shorten(value, 100));
   const sendInput = String(env.CHANGE_VALIDATION_SEND ?? '').trim();
   if (sendInput !== '' && sendInput !== 'true' && sendInput !== 'false') {
-    print(annotation('error', `not sent: send has to be 'true' or 'false', got ${JSON.stringify(shorten(escapeInvisible(sendInput), 100))}`, {title: TITLE}));
-    return {exitCode: 1, outputs: {...NO_OUTPUTS, outcome: 'failed'}};
+    return inputError(`send has to be 'true' or 'false', got ${quoted(sendInput)}`);
+  }
+  const expectedInput = String(env.CHANGE_VALIDATION_EXPECTED_HEAD_SHA ?? '').trim();
+  if (expectedInput !== '' && !COMMIT_SHA.test(expectedInput.toLowerCase())) {
+    return inputError(`expected-head-sha has to be a 40-character commit sha, got ${quoted(expectedInput)}`);
+  }
+  const requireInput = String(env.CHANGE_VALIDATION_REQUIRE_EXPECTED_HEAD ?? '').trim();
+  if (requireInput !== '' && requireInput !== 'true' && requireInput !== 'false') {
+    return inputError(`require-expected-head has to be 'true' or 'false', got ${quoted(requireInput)}`);
   }
   if (sendInput === 'false') {
+    if (env.CHANGE_VALIDATION_AWAIT === 'true') {
+      return inputError("send: 'false' sends no stage request, so there is nothing to await");
+    }
     return commentOnly({env, fetchImpl, print});
   }
   if (env.CHANGE_VALIDATION_AWAIT === 'true') {
@@ -1071,9 +1090,6 @@ async function commentOnly({env, fetchImpl, print}) {
     report('error', `not sent: ${message}`);
     return finish('failed', 1);
   };
-  if (env.CHANGE_VALIDATION_AWAIT === 'true') {
-    return fail("send: 'false' sends no stage request, so there is nothing to await");
-  }
   if (String(env.CHANGE_VALIDATION_COMMENT ?? '').trim().toLowerCase() !== 'true') {
     return fail("send: 'false' only keeps the comment current, so it needs comment: 'true'");
   }
@@ -1090,8 +1106,8 @@ async function commentOnly({env, fetchImpl, print}) {
   let number;
   try {
     if (eventName === 'pull_request') {
-      if (payload.action === 'closed') {
-        report('notice', "not sent: send: 'false' keeps no comment on a closed pull request");
+      if (!PULL_REQUEST_ACTIONS.has(payload.action)) {
+        report('notice', `not sent: pull_request ${payload.action} is not taken`);
         return finish('skipped', 0);
       }
       if (isFork(payload.pull_request)) {
@@ -1117,8 +1133,13 @@ async function commentOnly({env, fetchImpl, print}) {
       }
       const repository = env.GITHUB_REPOSITORY ?? '';
       const githubApiUrl = (env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, '');
+      const token = env.GH_TOKEN ?? '';
+      const pr = await fetchPullRequest({githubApiUrl, repository, number: payload.issue.number, token, fetchImpl});
+      if (isFork(pr)) {
+        throw new Refusal(`pull request #${payload.issue.number} comes from a fork, or one that can't be told apart from a fork`);
+      }
       const login = payload.comment?.user?.login;
-      if (!login || !(await commenterCanWrite({githubApiUrl, repository, login, token: env.GH_TOKEN ?? '', fetchImpl}))) {
+      if (!login || !(await commenterCanWrite({githubApiUrl, repository, login, token, fetchImpl}))) {
         throw new Refusal(`comments are taken only from someone with write access to ${repository}; ${login ?? 'the commenter'} has none`);
       }
       number = payload.issue.number;

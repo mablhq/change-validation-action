@@ -1547,14 +1547,100 @@ describe('expected-head-sha', () => {
     assert.equal(told.outputs.outcome, 'accepted');
   });
 
-  it('fails, sending nothing, when it is not a commit sha', async () => {
+  for (const [label, eventName, payload, env] of [
+    ['a stage request', 'pull_request', prEvent('opened'), {}],
+    ['a merge queue entry', 'merge_group', {action: 'checks_requested'}, {CHANGE_VALIDATION_STAGE: 'merge_queue'}],
+    ['a command', 'issue_comment', commentEvent('MEMBER'), {CHANGE_VALIDATION_COMMAND: 'look again'}],
+    ['a merged pull request', 'pull_request', closedEvent(), {CHANGE_VALIDATION_STAGE: ''}],
+    ['an action not sent', 'pull_request', prEvent('labeled'), {}],
+    ["send: 'false'", 'pull_request', prEvent('synchronize', {pull_request: pullRequest()}), {CHANGE_VALIDATION_SEND: 'false', CHANGE_VALIDATION_COMMENT: 'true'}],
+  ]) {
+    it(`fails, calling nothing, when it is not a commit sha, even on ${label}`, async () => {
+      const stubbed = stub();
+      const {exitCode, outputs, lines} = await runWith(eventName, payload, stubbed, {...env, CHANGE_VALIDATION_EXPECTED_HEAD_SHA: 'abc1234'});
+
+      assert.equal(exitCode, 1);
+      assert.equal(outputs.outcome, 'failed');
+      assert.equal(stubbed.calls.length, 0);
+      assert.match(lines.join('\n'), /expected-head-sha has to be a 40-character commit sha/);
+    });
+  }
+
+  it('publishes error, with await, when it is not a commit sha', async () => {
+    const statuses = [];
     const stubbed = stub();
-    const {exitCode, outputs, lines} = await runWith('pull_request', prEvent('opened'), stubbed, {CHANGE_VALIDATION_EXPECTED_HEAD_SHA: 'abc1234'});
+    const fetchImpl = async (url, init = {}) => {
+      if (new URL(url).pathname.startsWith('/repos/Org/Repo/statuses/')) {
+        statuses.push(JSON.parse(init.body));
+        return new Response('{}', {status: 201});
+      }
+      return stubbed.fetchImpl(url, init);
+    };
+    const {exitCode, outputs} = await runWith('merge_group', {action: 'checks_requested', merge_group: {head_sha: HEAD}}, {fetchImpl}, {
+      CHANGE_VALIDATION_STAGE: 'merge_queue',
+      CHANGE_VALIDATION_AWAIT: 'true',
+      STATUS_CONTEXT: 'ctx',
+      CHANGE_VALIDATION_EXPECTED_HEAD_SHA: 'nope',
+    });
 
     assert.equal(exitCode, 1);
-    assert.equal(outputs.outcome, 'failed');
-    assert.equal(stubbed.mablCalls().length, 0);
-    assert.match(lines.join('\n'), /expected-head-sha has to be a 40-character commit sha/);
+    assert.equal(outputs.status, 'error');
+    assert.equal(statuses.length, 1);
+    assert.equal(statuses[0].state, 'error');
+  });
+});
+
+describe('require-expected-head', () => {
+  const REQUIRE = {CHANGE_VALIDATION_REQUIRE_EXPECTED_HEAD: 'true'};
+
+  for (const [label, eventName, payload, env] of [
+    ['a pull request', 'pull_request', prEvent('synchronize'), {}],
+    ['the trigger word alone', 'issue_comment', commentEvent('MEMBER'), {CHANGE_VALIDATION_COMMAND: ''}],
+  ]) {
+    for (const value of ['', '   ']) {
+      it(`fails, calling nothing, on ${label} when expected-head-sha is ${JSON.stringify(value)}`, async () => {
+        const stubbed = stub();
+        const {exitCode, outputs, lines} = await runWith(eventName, payload, stubbed, {...env, ...REQUIRE, CHANGE_VALIDATION_EXPECTED_HEAD_SHA: value});
+
+        assert.equal(exitCode, 1);
+        assert.equal(outputs.outcome, 'failed');
+        assert.equal(stubbed.calls.length, 0);
+        assert.match(lines.join('\n'), /require-expected-head is true, but expected-head-sha is empty/);
+      });
+    }
+  }
+
+  it('sends at the expected head when one is given', async () => {
+    const stubbed = stub();
+    const {outputs} = await runWith('pull_request', prEvent('synchronize'), stubbed, {...REQUIRE, CHANGE_VALIDATION_EXPECTED_HEAD_SHA: HEAD});
+
+    assert.equal(outputs.outcome, 'accepted');
+  });
+
+  it('sends an empty expected-head-sha unchecked without it, as before', async () => {
+    for (const require of ['', 'false']) {
+      const stubbed = stub();
+      const {outputs} = await runWith('pull_request', prEvent('synchronize'), stubbed, {CHANGE_VALIDATION_REQUIRE_EXPECTED_HEAD: require});
+      assert.equal(outputs.outcome, 'accepted', require);
+    }
+  });
+
+  it('does not apply to a command or a merged pull request', async () => {
+    const command = stub({mabl: [json(200, {session_id: 's1-as', created: false, event: 'accepted', agent: 'working'})]});
+    const sent = await runWith('issue_comment', commentEvent('MEMBER'), command, {...REQUIRE, CHANGE_VALIDATION_COMMAND: 'look again'});
+    assert.equal(sent.outputs.outcome, 'accepted');
+
+    const merged = stub({mabl: [json(200, {session_id: 's1-as', created: false, event: 'accepted', agent: 'working'})]});
+    const told = await runWith('pull_request', closedEvent(), merged, {...REQUIRE, CHANGE_VALIDATION_STAGE: ''});
+    assert.equal(told.outputs.outcome, 'accepted');
+  });
+
+  it("fails on a value other than 'true' or 'false'", async () => {
+    const stubbed = stub();
+    const {exitCode} = await runWith('pull_request', prEvent('opened'), stubbed, {CHANGE_VALIDATION_REQUIRE_EXPECTED_HEAD: 'yes'});
+
+    assert.equal(exitCode, 1);
+    assert.equal(stubbed.calls.length, 0);
   });
 });
 
@@ -1571,14 +1657,23 @@ describe("send: 'false'", () => {
     assert.ok(lines.some((line) => line.startsWith('::notice') && line.includes("no stage request sent (send: 'false')")));
   });
 
-  it('takes a trusted commenter with write access on issue_comment, checking only the permission', async () => {
+  it('takes a trusted commenter with write access on issue_comment, reading only the pull request and the permission', async () => {
     const stubbed = stub();
     const {exitCode, outputs} = await runWith('issue_comment', commentEvent('MEMBER'), stubbed, REFRESH);
 
     assert.equal(exitCode, 0);
     assert.equal(outputs.outcome, 'comment_only');
     assert.equal(outputs['pull-request-number'], '7');
-    assert.deepEqual(stubbed.calls.map((call) => call.url.pathname), ['/repos/Org/Repo/collaborators/dev/permission']);
+    assert.deepEqual(stubbed.calls.map((call) => call.url.pathname), ['/repos/Org/Repo/pulls/7', '/repos/Org/Repo/collaborators/dev/permission']);
+  });
+
+  it("refuses a fork's pull request on issue_comment, before checking the commenter", async () => {
+    const stubbed = stub({pr: pullRequest({head: {sha: HEAD, ref: 'f', repo: {id: 2002}}})});
+    const {exitCode, outputs} = await runWith('issue_comment', commentEvent('MEMBER'), stubbed, REFRESH);
+
+    assert.equal(exitCode, 0);
+    assert.equal(outputs.outcome, 'refused');
+    assert.deepEqual(stubbed.calls.map((call) => call.url.pathname), ['/repos/Org/Repo/pulls/7']);
   });
 
   it('refuses a commenter without write access, or outside the repository, and a fork', async () => {
@@ -1601,6 +1696,7 @@ describe("send: 'false'", () => {
     for (const [eventName, payload, env] of [
       ['issue_comment', commentEvent('MEMBER'), {CHANGE_VALIDATION_TRIGGER_WORD: '/other'}],
       ['pull_request', closedEvent(), {}],
+      ['pull_request', prEvent('labeled', {pull_request: pullRequest()}), {}],
       ['issue_comment', commentEvent('MEMBER', {issue: {number: 7}}), {}],
       ['issue_comment', commentEvent('MEMBER', {action: 'edited'}), {}],
     ]) {

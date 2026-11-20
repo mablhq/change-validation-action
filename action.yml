@@ -36,9 +36,13 @@ inputs:
     required: false
     default: ''
   expected-head-sha:
-    description: "On pull_request and issue_comment, the pull request head the caller checked, such as the commit its preview was built from. If the pull request's head is another commit when the request would be sent, nothing is sent and outcome is skipped. Ignored on merge_group, deployed commits, a merged pull request and a command"
+    description: "On pull_request and issue_comment, the pull request head the caller checked, such as the commit its preview was built from. If the pull request's head is another commit when the request would be sent, nothing is sent and outcome is skipped. Empty turns the check off; an issue_comment event carries no head, so look it up yourself. Ignored on merge_group, deployed commits, a merged pull request, a command and with send 'false', but always has to be a 40-character commit sha when set"
     required: false
     default: ''
+  require-expected-head:
+    description: "'true' to fail, sending nothing, when expected-head-sha is empty where it applies: a pull request's stage request on pull_request or issue_comment. Use it when the value comes from an expression that can be empty"
+    required: false
+    default: 'false'
   head-sha:
     description: "On a deployed commit, the commit; when empty, a deployment_status event's sha or a workflow_run's head_sha, else the run's GITHUB_SHA. It must be on the default branch, unless a branch push just pushed it. Ignored on pull_request, issue_comment and merge_group"
     required: false

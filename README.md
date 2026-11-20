@@ -124,7 +124,8 @@ or the action refuses it. `base-sha` is the commit the environment ran before, w
 | `deadline-minutes` | `40` | With `await`, how long to wait before publishing failure, 1 to 120. Set the job's `timeout-minutes` to at least this + 5 |
 | `change-description` | built from the pull request | What the change does, in product terms, written by any earlier step. When empty, the action builds one from the pull request's title, body, changed paths per application and diff totals |
 | `change-description-head-sha` | | The head `change-description` was written for; required with it |
-| `expected-head-sha` | | On a pull request or a comment: send only if the pull request's head is still this commit. See [Sending only the head you checked](#sending-only-the-head-you-checked) |
+| `expected-head-sha` | | On a pull request or a comment: send only if the pull request's head is still this commit; empty turns the check off. See [Sending only the head you checked](#sending-only-the-head-you-checked) |
+| `require-expected-head` | `false` | `true` fails, sending nothing, when `expected-head-sha` is empty where it applies |
 | `head-sha`, `base-sha` | the event's | For a deployed commit: the commit, and the one the environment ran before |
 | `trigger-word` | | On `issue_comment`, the word a comment must start with, such as `/mabl`. See [Comment commands](#comment-commands) |
 | `command` | | On `issue_comment` without `trigger-word`, the text after your own trigger word, sent to the pull request's mabl agent |
@@ -161,7 +162,7 @@ stage's checks are going. It posts the markdown mabl renders, as is.
 - **On an awaited merge queue entry**, it updates the comment once, after the status is published.
 - **With `send: false`**, on a pull request or comment event, it keeps the comment current the same way, without
   sending anything.
-- **Never on** comment commands, deployed commits, or a request mabl didn't take.
+- **Never on** deployed commits or a request mabl didn't take, and on a comment event only with `send: false`.
 
 The comment can't change the request's outcome, outputs or commit status: a failed report read or post is a log
 line or one warning, never a failed step. It updates the oldest comment the same token wrote for the same mabl
@@ -176,8 +177,14 @@ the prose.
 
 With `send: false` and `comment: true`, the action sends no stage request. It reads mabl's report of the pull
 request and keeps the comment current for up to `comment-wait-minutes`, as it does after a request, and `outcome`
-is `comment_only`. It runs on `pull_request` and `issue_comment` events, and makes the checks a request from the
-same event would: no forks, and on a comment the trigger word and a commenter with write access.
+is `comment_only`. It creates the comment if there is none yet. It runs on `pull_request` (the same actions a
+request is sent for) and `issue_comment` events, and makes the checks a request from the same event would: no
+forks, and on a comment the trigger word and a commenter with write access.
+
+Without a request of its own, it reads the report again just before each write, so it doesn't put back an older
+report than a run that sent a request has just written. A run that sends and a run with `send: false` for the
+same pull request can still overlap for that one read, so give both a concurrency group per pull request where
+you can.
 
 Use it when your workflow decides not to send, but the comment should still catch up. For example, a workflow
 that sends only a pull request's first commit can still refresh the comment on later pushes, so the comment
@@ -237,7 +244,13 @@ would send a commit your check never saw. Pass the commit you checked as `expect
 When the pull request's head is another commit as the request would go out, including after the action reads
 the pull request again because it moved while its files were listed, nothing is sent and `outcome` is `skipped`,
 with a notice. The push's own run sends the new head. It applies to a pull request's stage request and to the
-trigger word alone; a comment command, a merged pull request, a merge queue entry and a deployed commit ignore it.
+trigger word alone; a comment command, a merged pull request, a merge queue entry, a deployed commit and
+`send: false` ignore it. A value that isn't a full commit sha fails the run on any event.
+
+An empty value turns the check off, and some expressions are empty on some events:
+`github.event.pull_request.head.sha` is empty on `issue_comment`, so a comment workflow has to look the head up
+itself, for example with the same API call its own check makes. Set `require-expected-head: true` to make an empty
+value fail the run, sending nothing, instead of sending unchecked.
 
 ## Good to know
 

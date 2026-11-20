@@ -11,6 +11,7 @@ export const INPUTS = {
   'change-description': 'CHANGE_DESCRIPTION',
   'change-description-head-sha': 'CHANGE_DESCRIPTION_HEAD_SHA',
   'expected-head-sha': 'CHANGE_VALIDATION_EXPECTED_HEAD_SHA',
+  'require-expected-head': 'CHANGE_VALIDATION_REQUIRE_EXPECTED_HEAD',
   'head-sha': 'CHANGE_VALIDATION_HEAD_SHA',
   'base-sha': 'CHANGE_VALIDATION_BASE_SHA',
   'dry-run': 'CHANGE_VALIDATION_DRY_RUN',

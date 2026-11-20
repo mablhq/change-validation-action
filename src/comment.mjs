@@ -113,8 +113,11 @@ const describeAnswer = ({status, body, error}) =>
   `${status ? `HTTP ${status}` : 'no answer'}${typeof body?.error_code === 'string' ? ` ${body.error_code}` : ''}${(error ?? body?.message) ? `: ${error ?? body.message}` : ''}`;
 
 // Creates or updates the oldest comment this token wrote on the pull request whose first line is the
-// marker and whose data line names `markdown`'s session; says which it did.
-async function upsertComment({env, number, markdown, fetchImpl}) {
+// marker and whose data line names `report`'s session. With `reread`, the report is read again just
+// before the write, and the newer one is written when it names the same session. Returns what it did
+// and the report it wrote.
+async function upsertComment({env, number, report, fetchImpl, reread}) {
+  let markdown = report.markdown;
   const githubApiUrl = (env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, '');
   const graphqlUrl = env.GITHUB_GRAPHQL_URL || `${githubApiUrl}/graphql`;
   const [owner, name] = String(env.GITHUB_REPOSITORY ?? '').split('/');
@@ -166,15 +169,23 @@ async function upsertComment({env, number, markdown, fetchImpl}) {
     }
     after = pull.comments.pageInfo.endCursor;
   }
+  let written = report;
+  if (reread) {
+    const fresh = await reread();
+    if (fresh && dataSession(fresh.markdown) === session) {
+      written = fresh;
+      markdown = fresh.markdown;
+    }
+  }
   if (!oldest) {
     await graphql(CREATE_MUTATION, {subject, body: markdown});
-    return 'created';
+    return {done: 'created', written};
   }
   if (sameBody(oldest.body, markdown)) {
-    return 'unchanged';
+    return {done: 'unchanged', written};
   }
   await graphql(UPDATE_MUTATION, {id: oldest.id, body: markdown});
-  return 'updated';
+  return {done: 'updated', written};
 }
 
 export async function main({env = process.env, fetchImpl = fetch, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = Date.now, print = (line) => process.stdout.write(`${line}\n`)} = {}) {
@@ -225,8 +236,18 @@ export async function main({env = process.env, fetchImpl = fetch, sleep = (ms) =
     }
     if (ok && !reason) {
       let posted = false;
+      let written = answer.body;
       try {
-        log(`${commentLabel}: ${await upsertComment({env, number, markdown: answer.body.markdown, fetchImpl})}`);
+        // Without a request of its own, this run can hold an older report than a sending run just wrote.
+        const reread = refreshOnly(env)
+          ? async () => {
+              const again = await readReport({apiUrl, apiKey, request, fetchImpl});
+              return again.status >= 200 && again.status < 300 && !unreadableReason(again.body) ? again.body : null;
+            }
+          : undefined;
+        const upserted = await upsertComment({env, number, report: answer.body, fetchImpl, reread});
+        written = upserted.written;
+        log(`${commentLabel}: ${upserted.done}`);
         posted = true;
       } catch (error) {
         if (error.forbidden) {
@@ -235,7 +256,7 @@ export async function main({env = process.env, fetchImpl = fetch, sleep = (ms) =
         }
         log(`${commentLabel}: not posted this time (${error.message})`);
       }
-      if (plan === 'once' || (posted && analysesFinished(answer.body))) {
+      if (plan === 'once' || (posted && analysesFinished(written))) {
         return;
       }
     } else {

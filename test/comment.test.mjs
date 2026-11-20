@@ -444,14 +444,15 @@ describe("the comment with send 'false'", () => {
     ['pull_request', {action: 'synchronize'}],
     ['issue_comment', {action: 'created', issue: {number: 7, pull_request: {url: 'x'}}}],
   ]) {
-    it(`keeps the comment current on ${eventName}, as after a stage request`, async () => {
+    it(`keeps the comment current on ${eventName}, reading the report again before each write`, async () => {
+      const analysing = json(200, reportOf({text: 'analysing'}));
       const stubbed = stub({
-        reports: [json(200, reportOf({text: 'analysing'})), json(200, reportOf({analysed: [true], text: 'done'}))],
+        reports: [analysing, analysing, analysing, json(200, reportOf({analysed: [true], text: 'done'}))],
         comments: [{id: 'IC_1', body: bodyOf('older', 's1-as'), author: OURS}],
       });
       const lines = await step(stubbed, {...REFRESH, GITHUB_EVENT_NAME: eventName}, payload);
 
-      assert.equal(stubbed.reads().length, 2);
+      assert.equal(stubbed.reads().length, 4);
       assert.equal(stubbed.creates().length, 0);
       assert.equal(stubbed.updates().length, 2);
       assert.equal(stubbed.store[0].body, bodyOf('done', 's1-as'));
@@ -469,7 +470,38 @@ describe("the comment with send 'false'", () => {
     const stubbed = stub({reports: [json(200, reportOf({text: 'analysing'}))]});
     await step(stubbed, {...REFRESH, COMMENT_WAIT_MINUTES: '2'});
 
-    assert.equal(stubbed.reads().length, 1 + (2 * MINUTE) / POLL_INTERVAL_MS);
+    // Each poll reads once, then again before its write.
+    assert.equal(stubbed.reads().length, 2 * (1 + (2 * MINUTE) / POLL_INTERVAL_MS));
+  });
+
+  it('writes the report read just before the write, not an older one read first', async () => {
+    const stubbed = stub({
+      reports: [json(200, reportOf({analysed: [true], text: 'stale'})), json(200, reportOf({analysed: [true], text: 'final'}))],
+      comments: [{id: 'IC_1', body: bodyOf('final', 's1-as'), author: OURS}],
+    });
+    await step(stubbed, REFRESH);
+
+    assert.equal(stubbed.reads().length, 2);
+    assert.equal(stubbed.updates().length, 0);
+    assert.equal(stubbed.store[0].body, bodyOf('final', 's1-as'));
+  });
+
+  it('writes the first report when the second read fails or names another session', async () => {
+    for (const second of [json(500, {}), {throws: 'socket hang up'}, json(200, reportOf({analysed: [true], text: 'other', session: 's2-as'}))]) {
+      const stubbed = stub({reports: [json(200, reportOf({analysed: [true], text: 'first'})), second]});
+      const lines = await step(stubbed, REFRESH);
+
+      assert.equal(stubbed.creates().length, 1, JSON.stringify(second));
+      assert.equal(stubbed.store[0].body, bodyOf('first', 's1-as'));
+      assert.deepEqual(warnings(lines), []);
+    }
+  });
+
+  it('creates the comment when the pull request has none yet', async () => {
+    const stubbed = stub({reports: [DONE]});
+    await step(stubbed, REFRESH);
+
+    assert.equal(stubbed.creates().length, 1);
   });
 
   it('logs, without a warning, when mabl has no agent for the pull request yet', async () => {
