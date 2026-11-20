@@ -438,7 +438,7 @@ describe('when the comment step posts nothing', () => {
 });
 
 describe("the comment with send 'false'", () => {
-  const REFRESH = {CHANGE_VALIDATION_SEND: 'false', CHANGE_VALIDATION_OUTCOME: 'comment_only'};
+  const COMMENT_ONLY = {CHANGE_VALIDATION_SEND: 'false', CHANGE_VALIDATION_OUTCOME: 'comment_only'};
 
   for (const [eventName, payload] of [
     ['pull_request', {action: 'synchronize'}],
@@ -450,9 +450,9 @@ describe("the comment with send 'false'", () => {
         reports: [analysing, analysing, analysing, json(200, reportOf({analysed: [true], text: 'done'}))],
         comments: [{id: 'IC_1', body: bodyOf('older', 's1-as'), author: OURS}],
       });
-      const lines = await step(stubbed, {...REFRESH, GITHUB_EVENT_NAME: eventName}, payload);
+      const lines = await step(stubbed, {...COMMENT_ONLY, GITHUB_EVENT_NAME: eventName}, payload);
 
-      assert.equal(stubbed.reads().length, 4);
+      assert.equal(stubbed.reads().length, 5);
       assert.equal(stubbed.creates().length, 0);
       assert.equal(stubbed.updates().length, 2);
       assert.equal(stubbed.store[0].body, bodyOf('done', 's1-as'));
@@ -468,10 +468,10 @@ describe("the comment with send 'false'", () => {
 
   it('stops at comment-wait-minutes', async () => {
     const stubbed = stub({reports: [json(200, reportOf({text: 'analysing'}))]});
-    await step(stubbed, {...REFRESH, COMMENT_WAIT_MINUTES: '2'});
+    await step(stubbed, {...COMMENT_ONLY, COMMENT_WAIT_MINUTES: '2'});
 
-    // Each poll reads once, then again before its write.
-    assert.equal(stubbed.reads().length, 2 * (1 + (2 * MINUTE) / POLL_INTERVAL_MS));
+    // Each poll reads once; only the first, which creates the comment, reads again before its write.
+    assert.equal(stubbed.reads().length, 2 + (2 * MINUTE) / POLL_INTERVAL_MS);
   });
 
   it('writes the report read just before the write, not an older one read first', async () => {
@@ -479,7 +479,7 @@ describe("the comment with send 'false'", () => {
       reports: [json(200, reportOf({analysed: [true], text: 'stale'})), json(200, reportOf({analysed: [true], text: 'final'}))],
       comments: [{id: 'IC_1', body: bodyOf('final', 's1-as'), author: OURS}],
     });
-    await step(stubbed, REFRESH);
+    await step(stubbed, COMMENT_ONLY);
 
     assert.equal(stubbed.reads().length, 2);
     assert.equal(stubbed.updates().length, 0);
@@ -489,7 +489,7 @@ describe("the comment with send 'false'", () => {
   it('writes the first report when the second read fails or names another session', async () => {
     for (const second of [json(500, {}), {throws: 'socket hang up'}, json(200, reportOf({analysed: [true], text: 'other', session: 's2-as'}))]) {
       const stubbed = stub({reports: [json(200, reportOf({analysed: [true], text: 'first'})), second]});
-      const lines = await step(stubbed, REFRESH);
+      const lines = await step(stubbed, COMMENT_ONLY);
 
       assert.equal(stubbed.creates().length, 1, JSON.stringify(second));
       assert.equal(stubbed.store[0].body, bodyOf('first', 's1-as'));
@@ -499,14 +499,14 @@ describe("the comment with send 'false'", () => {
 
   it('creates the comment when the pull request has none yet', async () => {
     const stubbed = stub({reports: [DONE]});
-    await step(stubbed, REFRESH);
+    await step(stubbed, COMMENT_ONLY);
 
     assert.equal(stubbed.creates().length, 1);
   });
 
   it('logs, without a warning, when mabl has no agent for the pull request yet', async () => {
     const stubbed = stub({reports: [json(404, {error_code: 'no_change_agent', message: 'no agent'})]});
-    const lines = await step(stubbed, REFRESH);
+    const lines = await step(stubbed, COMMENT_ONLY);
 
     assert.equal(stubbed.reads().length, 1);
     assert.deepEqual(warnings(lines), []);
@@ -515,17 +515,17 @@ describe("the comment with send 'false'", () => {
 
   it('still warns on any other 4xx', async () => {
     const stubbed = stub({reports: [json(403, {error_code: 'forbidden', message: 'no'})]});
-    const lines = await step(stubbed, REFRESH);
+    const lines = await step(stubbed, COMMENT_ONLY);
 
     assert.equal(warnings(lines).length, 1);
   });
 
   it('reads nothing when the run did not name a pull request to refresh, or on another event', async () => {
     for (const env of [
-      {...REFRESH, CHANGE_VALIDATION_OUTCOME: 'refused'},
-      {...REFRESH, CHANGE_VALIDATION_OUTCOME: 'failed'},
-      {...REFRESH, GITHUB_EVENT_NAME: 'merge_group'},
-      {...REFRESH, CHANGE_VALIDATION_COMMENT: 'false'},
+      {...COMMENT_ONLY, CHANGE_VALIDATION_OUTCOME: 'refused'},
+      {...COMMENT_ONLY, CHANGE_VALIDATION_OUTCOME: 'failed'},
+      {...COMMENT_ONLY, GITHUB_EVENT_NAME: 'merge_group'},
+      {...COMMENT_ONLY, CHANGE_VALIDATION_COMMENT: 'false'},
     ]) {
       const stubbed = stub();
       await step(stubbed, env);
@@ -533,7 +533,7 @@ describe("the comment with send 'false'", () => {
     }
   });
 
-  it('leaves a sent issue_comment request without a comment wait, as before', async () => {
+  it('keeps no comment after a sent issue_comment request', async () => {
     for (const send of ['', 'true']) {
       const stubbed = stub();
       await step(stubbed, {GITHUB_EVENT_NAME: 'issue_comment', CHANGE_VALIDATION_SEND: send}, {action: 'created'});

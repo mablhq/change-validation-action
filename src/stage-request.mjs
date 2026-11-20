@@ -61,6 +61,7 @@ function clip(text, max) {
 }
 
 class Refusal extends Error {}
+const forkRefusal = (number) => new Refusal(`pull request #${number} comes from a fork, or one that can't be told apart from a fork`);
 
 function githubGet({githubApiUrl, path, token, fetchImpl}) {
   return fetchImpl(`${githubApiUrl}${path}`, {
@@ -603,7 +604,7 @@ async function buildMergedRequest({payload, env, fetchImpl}) {
     return {skip: 'the pull request closed without merging'};
   }
   if (isFork(pr)) {
-    throw new Refusal(`pull request #${pr.number} comes from a fork, or one that can't be told apart from a fork`);
+    throw forkRefusal(pr.number);
   }
   const merge = String(pr.merge_commit_sha ?? '').toLowerCase();
   if (!COMMIT_SHA.test(merge)) {
@@ -765,9 +766,9 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
   if (!Number.isInteger(number) || number < 1) {
     throw new Error('the event names no pull request');
   }
-  // Where expected-head-sha applies: a pull request's own stage request, not a command or a queue entry.
-  const expectedHead = queued || kind === 'command' ? '' : String(env.CHANGE_VALIDATION_EXPECTED_HEAD_SHA ?? '').trim().toLowerCase();
-  if (!queued && kind !== 'command' && !expectedHead && String(env.CHANGE_VALIDATION_REQUIRE_EXPECTED_HEAD ?? '').trim() === 'true') {
+  const expectedHeadApplies = !queued && kind !== 'command';
+  const expectedHead = expectedHeadApplies ? String(env.CHANGE_VALIDATION_EXPECTED_HEAD_SHA ?? '').trim().toLowerCase() : '';
+  if (expectedHeadApplies && !expectedHead && String(env.CHANGE_VALIDATION_REQUIRE_EXPECTED_HEAD ?? '').trim() === 'true') {
     throw new Error('require-expected-head is true, but expected-head-sha is empty');
   }
 
@@ -777,7 +778,7 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
   // Fetched rather than taken from the payload: mabl wants the head as of sending.
   const pr = await fetchPullRequest({githubApiUrl, repository, number, token, fetchImpl});
   if (isFork(pr)) {
-    throw new Refusal(`pull request #${number} comes from a fork, or one that can't be told apart from a fork`);
+    throw forkRefusal(number);
   }
   const repositoryId = repositoryIdOf(env.GITHUB_SERVER_URL || 'https://github.com', repository);
   const base = {
@@ -1111,7 +1112,7 @@ async function commentOnly({env, fetchImpl, print}) {
         return finish('skipped', 0);
       }
       if (isFork(payload.pull_request)) {
-        throw new Refusal(`pull request #${payload.pull_request?.number} comes from a fork, or one that can't be told apart from a fork`);
+        throw forkRefusal(payload.pull_request?.number);
       }
       number = payload.pull_request?.number;
     } else if (eventName === 'issue_comment') {
@@ -1136,7 +1137,7 @@ async function commentOnly({env, fetchImpl, print}) {
       const token = env.GH_TOKEN ?? '';
       const pr = await fetchPullRequest({githubApiUrl, repository, number: payload.issue.number, token, fetchImpl});
       if (isFork(pr)) {
-        throw new Refusal(`pull request #${payload.issue.number} comes from a fork, or one that can't be told apart from a fork`);
+        throw forkRefusal(payload.issue.number);
       }
       const login = payload.comment?.user?.login;
       if (!login || !(await commenterCanWrite({githubApiUrl, repository, login, token, fetchImpl}))) {

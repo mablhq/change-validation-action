@@ -16,7 +16,7 @@ const DATA_PREFIX = '<!-- mabl-change-validation-data ';
 const DATA_SUFFIX = ' -->';
 export const POLL_INTERVAL_MS = 20_000;
 const NO_CHANGE_AGENT = 'no_change_agent';
-const refreshOnly = (env) => String(env.CHANGE_VALIDATION_SEND ?? '').trim() === 'false';
+const commentOnly = (env) => String(env.CHANGE_VALIDATION_SEND ?? '').trim() === 'false';
 const DEFAULT_WAIT_MINUTES = 15;
 const REQUEST_TIMEOUT_MS = 30_000;
 const COMMENTS_PER_PAGE = 100;
@@ -38,7 +38,7 @@ export function commentPlan({env, payload}) {
     return null;
   }
   const eventName = env.GITHUB_EVENT_NAME;
-  if (refreshOnly(env)) {
+  if (commentOnly(env)) {
     return env.CHANGE_VALIDATION_OUTCOME === 'comment_only' && (eventName === 'pull_request' || eventName === 'issue_comment') ? 'wait' : null;
   }
   if (env.CHANGE_VALIDATION_AWAIT === 'true') {
@@ -115,9 +115,8 @@ const describeAnswer = ({status, body, error}) =>
 // Creates or updates the oldest comment this token wrote on the pull request whose first line is the
 // marker and whose data line names `report`'s session. With `reread`, the report is read again just
 // before the write, and the newer one is written when it names the same session. Returns what it did
-// and the report it wrote.
+// and the report the comment now shows.
 async function upsertComment({env, number, report, fetchImpl, reread}) {
-  let markdown = report.markdown;
   const githubApiUrl = (env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, '');
   const graphqlUrl = env.GITHUB_GRAPHQL_URL || `${githubApiUrl}/graphql`;
   const [owner, name] = String(env.GITHUB_REPOSITORY ?? '').split('/');
@@ -145,7 +144,7 @@ async function upsertComment({env, number, report, fetchImpl, reread}) {
     return answer?.data ?? {};
   };
 
-  const session = dataSession(markdown);
+  const session = dataSession(report.markdown);
   let after = null;
   let subject = null;
   let oldest = null;
@@ -169,23 +168,24 @@ async function upsertComment({env, number, report, fetchImpl, reread}) {
     }
     after = pull.comments.pageInfo.endCursor;
   }
-  let written = report;
-  if (reread) {
-    const fresh = await reread();
-    if (fresh && dataSession(fresh.markdown) === session) {
-      written = fresh;
-      markdown = fresh.markdown;
+  let latestReport = report;
+  // Nothing is written when the comment already shows this report, so there is nothing to read again for.
+  if (reread && !(oldest && sameBody(oldest.body, report.markdown))) {
+    const rereadReport = await reread();
+    if (rereadReport && dataSession(rereadReport.markdown) === session) {
+      latestReport = rereadReport;
     }
   }
+  const markdown = latestReport.markdown;
   if (!oldest) {
     await graphql(CREATE_MUTATION, {subject, body: markdown});
-    return {done: 'created', written};
+    return {effect: 'created', latestReport};
   }
   if (sameBody(oldest.body, markdown)) {
-    return {done: 'unchanged', written};
+    return {effect: 'unchanged', latestReport};
   }
   await graphql(UPDATE_MUTATION, {id: oldest.id, body: markdown});
-  return {done: 'updated', written};
+  return {effect: 'updated', latestReport};
 }
 
 export async function main({env = process.env, fetchImpl = fetch, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = Date.now, print = (line) => process.stdout.write(`${line}\n`)} = {}) {
@@ -225,8 +225,8 @@ export async function main({env = process.env, fetchImpl = fetch, sleep = (ms) =
     const answer = await readReport({apiUrl, apiKey, request, fetchImpl});
     const ok = answer.status >= 200 && answer.status < 300;
     const reason = ok ? unreadableReason(answer.body) : null;
-    // Nothing to refresh: mabl has no agent for this pull request yet.
-    if (refreshOnly(env) && answer.status === 404 && answer.body?.error_code === NO_CHANGE_AGENT) {
+    // Expected before the pull request's first stage request, so a log line, not a warning.
+    if (commentOnly(env) && answer.status === 404 && answer.body?.error_code === NO_CHANGE_AGENT) {
       log(`${commentLabel}: not posted, mabl has no report for it yet`);
       return;
     }
@@ -236,18 +236,18 @@ export async function main({env = process.env, fetchImpl = fetch, sleep = (ms) =
     }
     if (ok && !reason) {
       let posted = false;
-      let written = answer.body;
+      let latestReport = answer.body;
       try {
         // Without a request of its own, this run can hold an older report than a sending run just wrote.
-        const reread = refreshOnly(env)
+        const reread = commentOnly(env)
           ? async () => {
               const again = await readReport({apiUrl, apiKey, request, fetchImpl});
               return again.status >= 200 && again.status < 300 && !unreadableReason(again.body) ? again.body : null;
             }
           : undefined;
         const upserted = await upsertComment({env, number, report: answer.body, fetchImpl, reread});
-        written = upserted.written;
-        log(`${commentLabel}: ${upserted.done}`);
+        latestReport = upserted.latestReport;
+        log(`${commentLabel}: ${upserted.effect}`);
         posted = true;
       } catch (error) {
         if (error.forbidden) {
@@ -256,7 +256,7 @@ export async function main({env = process.env, fetchImpl = fetch, sleep = (ms) =
         }
         log(`${commentLabel}: not posted this time (${error.message})`);
       }
-      if (plan === 'once' || (posted && analysesFinished(written))) {
+      if (plan === 'once' || (posted && analysesFinished(latestReport))) {
         return;
       }
     } else {

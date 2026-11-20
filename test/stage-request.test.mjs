@@ -1617,7 +1617,7 @@ describe('require-expected-head', () => {
     assert.equal(outputs.outcome, 'accepted');
   });
 
-  it('sends an empty expected-head-sha unchecked without it, as before', async () => {
+  it('sends unchecked when expected-head-sha is empty and not required', async () => {
     for (const require of ['', 'false']) {
       const stubbed = stub();
       const {outputs} = await runWith('pull_request', prEvent('synchronize'), stubbed, {CHANGE_VALIDATION_REQUIRE_EXPECTED_HEAD: require});
@@ -1645,11 +1645,11 @@ describe('require-expected-head', () => {
 });
 
 describe("send: 'false'", () => {
-  const REFRESH = {CHANGE_VALIDATION_SEND: 'false', CHANGE_VALIDATION_COMMENT: 'true'};
+  const COMMENT_ONLY = {CHANGE_VALIDATION_SEND: 'false', CHANGE_VALIDATION_COMMENT: 'true'};
 
   it('sends no stage request on a pull_request, and names the pull request for the comment', async () => {
     const stubbed = stub();
-    const {exitCode, outputs, lines} = await runWith('pull_request', prEvent('synchronize', {pull_request: pullRequest()}), stubbed, REFRESH);
+    const {exitCode, outputs, lines} = await runWith('pull_request', prEvent('synchronize', {pull_request: pullRequest()}), stubbed, COMMENT_ONLY);
 
     assert.equal(exitCode, 0);
     assert.deepEqual(outputs, {outcome: 'comment_only', 'session-id': '', created: '', agent: '', 'description-source': '', 'pull-request-number': '7'});
@@ -1659,7 +1659,7 @@ describe("send: 'false'", () => {
 
   it('takes a trusted commenter with write access on issue_comment, reading only the pull request and the permission', async () => {
     const stubbed = stub();
-    const {exitCode, outputs} = await runWith('issue_comment', commentEvent('MEMBER'), stubbed, REFRESH);
+    const {exitCode, outputs} = await runWith('issue_comment', commentEvent('MEMBER'), stubbed, COMMENT_ONLY);
 
     assert.equal(exitCode, 0);
     assert.equal(outputs.outcome, 'comment_only');
@@ -1669,7 +1669,7 @@ describe("send: 'false'", () => {
 
   it("refuses a fork's pull request on issue_comment, before checking the commenter", async () => {
     const stubbed = stub({pr: pullRequest({head: {sha: HEAD, ref: 'f', repo: {id: 2002}}})});
-    const {exitCode, outputs} = await runWith('issue_comment', commentEvent('MEMBER'), stubbed, REFRESH);
+    const {exitCode, outputs} = await runWith('issue_comment', commentEvent('MEMBER'), stubbed, COMMENT_ONLY);
 
     assert.equal(exitCode, 0);
     assert.equal(outputs.outcome, 'refused');
@@ -1677,17 +1677,17 @@ describe("send: 'false'", () => {
   });
 
   it('refuses a commenter without write access, or outside the repository, and a fork', async () => {
-    const readOnly = await runWith('issue_comment', commentEvent('MEMBER'), stub({permission: json(200, {permission: 'read'})}), REFRESH);
+    const readOnly = await runWith('issue_comment', commentEvent('MEMBER'), stub({permission: json(200, {permission: 'read'})}), COMMENT_ONLY);
     assert.equal(readOnly.outputs.outcome, 'refused');
     assert.equal(readOnly.exitCode, 0);
 
     const outsider = stub();
-    const contributed = await runWith('issue_comment', commentEvent('CONTRIBUTOR'), outsider, REFRESH);
+    const contributed = await runWith('issue_comment', commentEvent('CONTRIBUTOR'), outsider, COMMENT_ONLY);
     assert.equal(contributed.outputs.outcome, 'refused');
     assert.equal(outsider.calls.length, 0);
 
     const fork = pullRequest({head: {sha: HEAD, ref: 'f', repo: {id: 2002}}});
-    const forked = await runWith('pull_request', prEvent('synchronize', {pull_request: fork}), stub(), {...REFRESH, ...NO_KEY});
+    const forked = await runWith('pull_request', prEvent('synchronize', {pull_request: fork}), stub(), {...COMMENT_ONLY, ...NO_KEY});
     assert.equal(forked.outputs.outcome, 'refused');
     assert.equal(forked.exitCode, 0);
   });
@@ -1701,7 +1701,7 @@ describe("send: 'false'", () => {
       ['issue_comment', commentEvent('MEMBER', {action: 'edited'}), {}],
     ]) {
       const stubbed = stub();
-      const {exitCode, outputs} = await runWith(eventName, payload, stubbed, {...REFRESH, ...env});
+      const {exitCode, outputs} = await runWith(eventName, payload, stubbed, {...COMMENT_ONLY, ...env});
       assert.equal(exitCode, 0, eventName);
       assert.equal(outputs.outcome, 'skipped', JSON.stringify(env));
       assert.equal(stubbed.calls.length, 0);
@@ -1719,7 +1719,7 @@ describe("send: 'false'", () => {
   ]) {
     it(`fails, calling nothing, ${label}`, async () => {
       const stubbed = stub();
-      const {exitCode, outputs, lines} = await runWith(eventName, payload, stubbed, {...REFRESH, ...env});
+      const {exitCode, outputs, lines} = await runWith(eventName, payload, stubbed, {...COMMENT_ONLY, ...env});
 
       assert.equal(exitCode, 1);
       assert.equal(outputs.outcome, 'failed');
@@ -1728,7 +1728,7 @@ describe("send: 'false'", () => {
     });
   }
 
-  it("fails on a value other than 'true' or 'false', and sends as before on 'true' or empty", async () => {
+  it("fails on a value other than 'true' or 'false', and sends on 'true' or empty", async () => {
     const odd = stub();
     const failed = await runWith('pull_request', prEvent('opened'), odd, {CHANGE_VALIDATION_SEND: 'no'});
     assert.equal(failed.exitCode, 1);
