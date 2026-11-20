@@ -153,6 +153,10 @@ response's `event` says what became of each one:
 - A late or repeated delivery can't roll a stage back to an older commit, so any request is safe to retry.
 - Two requests at the same time with different commits: the later arrival wins.
 - Retry only a `429`, a `5xx` and `agent_stopping`. Every other error stays until the request changes.
+- A merged event merges the mabl branch inside the call, so give it a long timeout, and don't send it again while
+  the first call may still be running: after no answer, or a gateway's error rather than mabl's own, wait a few
+  minutes before sending it again. A second event during the first one's merge can find the merge half done and
+  record the branch as `diverged`.
 
 ## Reading the status
 

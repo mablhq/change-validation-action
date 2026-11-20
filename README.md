@@ -157,8 +157,9 @@ stage's checks are going. It posts the markdown mabl renders, as is.
   to `comment-wait-minutes`, reading the report every 20 seconds until each application the change reaches has its
   analysis. Give the job `pull-requests: write` and a `timeout-minutes` of at least `comment-wait-minutes` + 5.
 - **On an awaited merge queue entry**, it updates the comment once, after the status is published.
-- **On a merged pull request** mabl took (`accepted` or `duplicate`), it updates the comment once, so it shows
-  what became of the pull request's mabl branch.
+- **On a merged pull request** mabl took (`accepted` or `duplicate`), it updates the comment so it shows what
+  became of the pull request's mabl branch, then reads and posts once more 20 seconds later, in case a merge queue
+  run that read the report before the merge posted over it.
 - **Never on** comment commands, deployed commits, or a request mabl didn't take.
 
 The comment can't change the request's outcome, outputs or commit status: a failed report read or post is a log
@@ -192,13 +193,21 @@ mabl answers the merged event with what became of the pull request's mabl branch
 | `diverged` | master changed after the branch for a test or flow, so mabl left it open | **Fails**, naming the branch and those tests and flows |
 | `failed` | The merge failed, and the branch may be partly merged | **Fails**, naming the branch |
 
-When no stage ran on a mabl branch there is nothing to merge, and the step passes with a notice saying so.
+When no stage ran on a mabl branch there is nothing to merge, and the step passes with a notice saying so. An
+outcome this version of the action doesn't know passes with a warning.
 
 mabl merges fast-forward only and never forces a merge, so a failed step means a person has to finish it: open the
 branch in mabl and merge it into master by hand. The pull request has already merged, so the failure can't block
-anything; it's there so someone sees it. `outcome` is still the event's, such as `accepted`. Running the job again
-doesn't merge again: mabl answers `duplicate` with the outcome it recorded, so the step fails the same way even
-after someone merged the branch by hand.
+anything; it's there so someone sees it. `outcome` is still the event's, such as `accepted`. The error names the
+tests and flows master moved past, up to ten with each name cut short, and the log lists them in full. Running the
+job again doesn't merge again: mabl answers `duplicate` with the outcome it recorded, so the step fails the same
+way even after someone merged the branch by hand, and the error says it's the recorded outcome.
+
+mabl merges the branch while it answers the merged event, so the action waits up to 5 minutes for that answer
+and doesn't send the event again when it gets none, or gets a gateway's error: mabl may still be merging, and a
+second event sent meanwhile could find the merge half done. The step fails and says to re-run the job a few
+minutes later, which reads the outcome mabl recorded. An answer from mabl itself, such as a 429, is retried as
+usual.
 
 With `comment: true`, the pull request's comment shows the same outcome, and before the merge it names the mabl
 branch each stage's tests run on.

@@ -30,6 +30,8 @@ export const RETRY_DELAYS_MS = [2_000, 5_000, 15_000];
 const QUIET_ERRORS = new Set(['feature_disabled', 'change_agent_closed', 'no_change_agent']);
 const TAKEN = new Set(['accepted', 'duplicate']);
 const REQUEST_TIMEOUT_MS = 60_000;
+// mabl merges the pull request's mabl branch inside the merged event's call, which can take a while.
+export const MERGED_TIMEOUT_MS = 300_000;
 const GITHUB_TIMEOUT_MS = 30_000;
 const RESOLVE_TIMEOUT_MS = 30_000;
 // The events route's cap, in UTF-16 units.
@@ -964,14 +966,31 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
 
 // agent_stopping comes as a 503.
 export const isRetryable = ({status}) => status === 0 || status === 429 || status >= 500;
+// A merged event that got no answer, or a gateway's answer, may still be merging the mabl branch, and a
+// second call made meanwhile could record the half-done merge as diverged. Only mabl's own answer is
+// retried.
+export const isRetryableMerged = ({status, body}) => status === 429 || (status >= 500 && body !== null && typeof body === 'object');
 
-// The same body each attempt; the api dedupes a repeat, so a retry is safe. With a `deadline`, no
-// attempt starts, runs or waits past it; `expired` says the first one never started.
-export async function send({apiUrl, apiKey, body, fetchImpl, sleep, log, deadline, now = Date.now, signalAfter = (ms) => AbortSignal.timeout(ms)}) {
+// The same body each attempt. The api dedupes a repeat it has finished with, so a retry is safe
+// once an earlier attempt's call has ended; `retryable` says which answers mean it has. With a
+// `deadline`, no attempt starts, runs or waits past it; `expired` says the first one never started.
+export async function send({
+  apiUrl,
+  apiKey,
+  body,
+  fetchImpl,
+  sleep,
+  log,
+  deadline,
+  now = Date.now,
+  signalAfter = (ms) => AbortSignal.timeout(ms),
+  timeoutMs = REQUEST_TIMEOUT_MS,
+  retryable = isRetryable,
+}) {
   const authorization = basicAuthorization(apiKey);
   const bounded = Number.isFinite(deadline);
   for (let attempt = 0; ; attempt += 1) {
-    const remaining = bounded ? deadline - now() : REQUEST_TIMEOUT_MS;
+    const remaining = bounded ? deadline - now() : timeoutMs;
     if (remaining <= 0) {
       log(`POST ${EVENTS_PATH}: not sent, the deadline has passed`);
       return {status: 0, body: null, errorCode: '', expired: true};
@@ -983,7 +1002,7 @@ export async function send({apiUrl, apiKey, body, fetchImpl, sleep, log, deadlin
         headers: {authorization, 'content-type': 'application/json', accept: 'application/json'},
         body: JSON.stringify(body),
         redirect: 'error',
-        signal: signalAfter(Math.min(REQUEST_TIMEOUT_MS, remaining), 'events'),
+        signal: signalAfter(Math.min(timeoutMs, remaining), 'events'),
       });
       const text = await response.text();
       let json = null;
@@ -1000,7 +1019,7 @@ export async function send({apiUrl, apiKey, body, fetchImpl, sleep, log, deadlin
     if (answer.status >= 200 && answer.status < 300) {
       return answer;
     }
-    if (!isRetryable(answer) || attempt >= RETRY_DELAYS_MS.length) {
+    if (!retryable(answer) || attempt >= RETRY_DELAYS_MS.length) {
       return answer;
     }
     if (bounded && now() + RETRY_DELAYS_MS[attempt] >= deadline) {
@@ -1041,14 +1060,14 @@ export async function run({
       return endWithErrorStatus({env, fetchImpl, signalAfter, print}, `await stopped: ${error?.message ?? error}`);
     }
   }
-  const {exitCode, outputs} = await sendStage({env, fetchImpl, sleep, now, print});
+  const {exitCode, outputs} = await sendStage({env, fetchImpl, sleep, now, print, signalAfter});
   return {exitCode, outputs};
 }
 
 // One request, as `run` sends it. Also returns the body sent (or built) and the last notice or error
 // reported, for await mode; `onSending` runs just before the request goes out and may return a
 // `{deadline, now, signalAfter}` budget for it.
-async function sendStage({env, fetchImpl, sleep, now = Date.now, print, onSending = async () => {}}) {
+async function sendStage({env, fetchImpl, sleep, now = Date.now, print, signalAfter, onSending = async () => {}}) {
   const apiKey = env.MABL_API_KEY ?? '';
   const redact = redactor(env);
   let said = '';
@@ -1124,7 +1143,18 @@ async function sendStage({env, fetchImpl, sleep, now = Date.now, print, onSendin
     body.event.occurred_at = now();
   }
   const budget = await onSending(body);
-  const answer = await send({apiUrl, apiKey, body, fetchImpl, sleep, log: (line) => print(redact(line)), ...budget});
+  const merged = body.event.kind === 'pull_request.merged';
+  const answer = await send({
+    apiUrl,
+    apiKey,
+    body,
+    fetchImpl,
+    sleep,
+    log: (line) => print(redact(line)),
+    ...(signalAfter ? {signalAfter} : {}),
+    ...(merged ? {timeoutMs: MERGED_TIMEOUT_MS, retryable: isRetryableMerged} : {}),
+    ...budget,
+  });
   if (answer.expired) {
     report('error', 'not sent: the deadline passed before the stage request could go out');
     return finish('timed_out', 1, described);
@@ -1135,8 +1165,8 @@ async function sendStage({env, fetchImpl, sleep, now = Date.now, print, onSendin
     report('notice', `${what}: ${result.event}${result.agent ? `, agent ${result.agent}` : ''} (${result.session_id})`);
     let exitCode = 0;
     // A superseded merged event is another merge commit's, so its branch isn't this one's to report.
-    if (body.event.kind === 'pull_request.merged' && TAKEN.has(result.event)) {
-      const landed = mergeOutcome(result.landed);
+    if (merged && TAKEN.has(result.event)) {
+      const landed = mergeOutcome(result.landed, {recorded: result.event === 'duplicate'});
       landed.annotations.forEach(({level, message}) => report(level, message));
       landed.log.forEach((line) => print(redact(escapeInvisible(line))));
       exitCode = landed.failed ? 1 : 0;
@@ -1154,6 +1184,8 @@ async function sendStage({env, fetchImpl, sleep, now = Date.now, print, onSendin
     report('notice', what);
     return finish(answer.errorCode, 0, described);
   }
-  report('error', what);
+  // Not retried, so whoever reads the log needs to know a re-run is how to learn the outcome.
+  const inFlight = merged && (answer.status === 0 || (answer.status >= 500 && !isRetryableMerged(answer)));
+  report('error', inFlight ? `${what}; mabl may still be merging the mabl branch, so re-run this job in a few minutes to read what it recorded` : what);
   return finish(answer.errorCode || 'failed', 1, described);
 }

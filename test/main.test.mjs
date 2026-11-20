@@ -193,6 +193,6 @@ describe('the action', () => {
     assert.equal(outputs.outcome, 'accepted');
     assert.ok(lines.some((line) => line.startsWith('::error ') && line.includes('mabl branch feature-x: not merged') && line.includes('test "Checkout"')), lines.join('\n'));
     assert.equal(calls.length, 1);
-    assert.equal(commentPlan({env: calls[0], payload: closed}), 'once');
+    assert.equal(commentPlan({env: calls[0], payload: closed}), 'merged');
   });
 });

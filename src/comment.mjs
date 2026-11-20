@@ -29,8 +29,8 @@ const FIND_QUERY =
 const CREATE_MUTATION = 'mutation($subject: ID!, $body: String!) { addComment(input: {subjectId: $subject, body: $body}) { commentEdge { node { id } } } }';
 const UPDATE_MUTATION = 'mutation($id: ID!, $body: String!) { updateIssueComment(input: {id: $id, body: $body}) { issueComment { id } } }';
 
-// `wait` on a pull request's own stage request mabl took, `once` after a merged event mabl took or an
-// awaited merge queue entry's status was published, otherwise null.
+// `wait` on a pull request's own stage request mabl took, `merged` after a merged event mabl took,
+// `once` after an awaited merge queue entry's status was published, otherwise null.
 export function commentPlan({env, payload}) {
   if (String(env.CHANGE_VALIDATION_COMMENT ?? '').trim().toLowerCase() !== 'true' || !/^[1-9][0-9]*$/.test(String(env.PULL_REQUEST_NUMBER ?? ''))) {
     return null;
@@ -42,7 +42,7 @@ export function commentPlan({env, payload}) {
   if (eventName !== 'pull_request' || !TAKEN.has(env.CHANGE_VALIDATION_OUTCOME)) {
     return null;
   }
-  return payload?.action === 'closed' ? 'once' : 'wait';
+  return payload?.action === 'closed' ? 'merged' : 'wait';
 }
 
 // The mabl agent's session_id on a comment's data line, or null. A workspace has one agent per pull
@@ -208,7 +208,10 @@ export async function main({env = process.env, fetchImpl = fetch, sleep = (ms) =
   const minutesText = String(env.COMMENT_WAIT_MINUTES ?? '').trim();
   const minutes = /^[0-9]+$/.test(minutesText) ? Number(minutesText) : DEFAULT_WAIT_MINUTES;
   const deadline = now() + minutes * MINUTE_MS;
-  for (;;) {
+  // A merged pull request's comment is read and posted again after one interval: a merge queue run that
+  // read the report before the merge may post after this run's first write, and a single read may fail.
+  const maxReads = {once: 1, merged: 2}[plan] ?? Infinity;
+  for (let reads = 1; ; reads += 1) {
     const answer = await readReport({apiUrl, apiKey, request, fetchImpl});
     const ok = answer.status >= 200 && answer.status < 300;
     const reason = ok ? unreadableReason(answer.body) : null;
@@ -228,16 +231,16 @@ export async function main({env = process.env, fetchImpl = fetch, sleep = (ms) =
         }
         log(`${commentLabel}: not posted this time (${error.message})`);
       }
-      if (plan === 'once' || (posted && analysesFinished(answer.body))) {
+      if (plan === 'wait' && posted && analysesFinished(answer.body)) {
         return;
       }
     } else {
       log(`${commentLabel}: skipped a read, mabl answered ${ok ? reason : describeAnswer(answer)}`);
     }
-    if (plan === 'once' || now() >= deadline) {
+    if (reads >= maxReads || (plan === 'wait' && now() >= deadline)) {
       log(`${commentLabel}: stopped`);
       return;
     }
-    await sleep(Math.min(POLL_INTERVAL_MS, deadline - now()));
+    await sleep(plan === 'wait' ? Math.min(POLL_INTERVAL_MS, deadline - now()) : POLL_INTERVAL_MS);
   }
 }
