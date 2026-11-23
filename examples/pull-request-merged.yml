@@ -1,6 +1,9 @@
 # .github/workflows/mabl-pull-request-merged.yml
 # Tells mabl a pull request merged. With `merge_mabl_branches: true` in the policy, mabl then merges the pull
-# request's mabl branch into master, as this API key, which must be a Command Line Interface key.
+# request's mabl branch into master, as this API key, which must be a Command Line Interface key. The step logs
+# what became of the branch, and fails when it diverged from master or the merge failed, so someone finishes the
+# merge by hand in mabl. To show the outcome in the pull request's comment too, add `comment: 'true'` and grant
+# `pull-requests: write`.
 name: mabl pull request merged
 on:
   pull_request:

@@ -171,4 +171,58 @@ describe('the action', () => {
     assert.equal(commentPlan({env: calls[0], payload}), 'wait');
     assert.match(readFileSync(output, 'utf8'), /^outcome<<ghadelimiter_[0-9a-f-]+\ncomment_only\n/);
   });
+
+  it("fails on a diverged mabl branch at the merge, and still updates the comment once to show it", async () => {
+    const closed = {
+      action: 'closed',
+      pull_request: {
+        number: 7,
+        html_url: 'https://github.com/Org/Repo/pull/7',
+        merged: true,
+        merge_commit_sha: 'f'.repeat(40),
+        merged_at: '2026-11-18T11:00:00Z',
+        head: {sha: HEAD, ref: 'feature-x', repo: {id: 1}},
+        base: {sha: 'b'.repeat(40), ref: 'main', repo: {id: 1}},
+      },
+    };
+    const landed = {merge_commit_sha: 'f'.repeat(40), merge_mabl_branches: true, branches: [{name: 'feature-x', outcome: 'diverged', diverged_entities: [{id: 'checkout-j', type: 'test', name: 'Checkout'}]}]};
+    const fetchImpl = async (url) => {
+      const path = new URL(url).pathname;
+      const answer = path.startsWith('/repos/Org/Repo/contents/')
+        ? {status: 200, body: 'version: 1\nmerge_mabl_branches: true\n'}
+        : path === EVENTS_PATH
+          ? json(200, {session_id: 's1-as', created: false, event: 'accepted', agent: 'working', landed})
+          : undefined;
+      assert.ok(answer, `unexpected ${url}`);
+      return new Response(answer.body, {status: answer.status});
+    };
+    const {event, output} = files(closed);
+    const calls = [];
+    const lines = [];
+    const {exitCode, outputs} = await action({
+      env: {
+        GITHUB_EVENT_NAME: 'pull_request',
+        GITHUB_EVENT_PATH: event,
+        GITHUB_OUTPUT: output,
+        GITHUB_REPOSITORY: 'Org/Repo',
+        GITHUB_API_URL: GITHUB_API,
+        GH_TOKEN: 'ghs_token',
+        MABL_API_KEY: 'mabl-key',
+        MABL_WORKSPACE_ID: 'ws-w',
+        CHANGE_VALIDATION_STAGE: 'pull_request',
+        CHANGE_VALIDATION_COMMENT: 'true',
+      },
+      fetchImpl,
+      print: (line) => lines.push(line),
+      comment: async ({env}) => {
+        calls.push(env);
+      },
+    });
+
+    assert.equal(exitCode, 1);
+    assert.equal(outputs.outcome, 'accepted');
+    assert.ok(lines.some((line) => line.startsWith('::error ') && line.includes('mabl branch feature-x: not merged') && line.includes('test "Checkout"')), lines.join('\n'));
+    assert.equal(calls.length, 1);
+    assert.equal(commentPlan({env: calls[0], payload: closed}), 'merged');
+  });
 });

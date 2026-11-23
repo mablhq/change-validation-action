@@ -76,7 +76,7 @@ inputs:
     required: false
     default: '40'
   comment:
-    description: "'true' to keep one comment on the pull request with mabl's report of the change, which can't change the request's outcome, outputs or status: kept current while the analyses run after a pull_request stage request or with send 'false', and updated once after an awaited merge queue entry's status is published"
+    description: "'true' to keep one comment on the pull request with mabl's report of the change, which can't change the request's outcome, outputs or status: kept current while the analyses run after a pull_request stage request or with send 'false', and updated once after an awaited merge queue entry's status is published or a merged pull request is recorded"
     required: false
     default: 'false'
   comment-wait-minutes:
