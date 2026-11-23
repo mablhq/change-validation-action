@@ -124,19 +124,23 @@ or the action refuses it. `base-sha` is the commit the environment ran before, w
 | `deadline-minutes` | `40` | With `await`, how long to wait before publishing failure, 1 to 120. Set the job's `timeout-minutes` to at least this + 5 |
 | `change-description` | built from the pull request | What the change does, in product terms, written by any earlier step. When empty, the action builds one from the pull request's title, body, changed paths per application and diff totals |
 | `change-description-head-sha` | | The head `change-description` was written for; required with it |
+| `expected-head-sha` | | On a pull request or a comment: send only if the pull request's head is still this commit; empty turns the check off. See [Sending only the head you checked](#sending-only-the-head-you-checked) |
+| `require-expected-head` | `false` | `true` fails, sending nothing, when `expected-head-sha` is empty where it applies |
 | `head-sha`, `base-sha` | the event's | For a deployed commit: the commit, and the one the environment ran before |
 | `trigger-word` | | On `issue_comment`, the word a comment must start with, such as `/mabl`. See [Comment commands](#comment-commands) |
 | `command` | | On `issue_comment` without `trigger-word`, the text after your own trigger word, sent to the pull request's mabl agent |
 | `comment` | `false` | `true` keeps one comment on the pull request with mabl's report. See [The pull request comment](#the-pull-request-comment) |
 | `comment-wait-minutes` | `15` | With `comment`, how long after a pull request stage request to keep the comment current |
+| `send` | `true` | `false` sends no stage request and only keeps the comment current; needs `comment: true`. See [Keeping the comment current without a request](#keeping-the-comment-current-without-a-request) |
 | `api-url` | `https://api.mabl.com` | The mabl api; no other is accepted |
 | `token` | `github.token` | Reads the pull request and the policy file; with `await`, needs `statuses: write`; with `comment`, `pull-requests: write` |
 
 Outputs: `outcome`, `session-id`, `created`, `agent`, `description-source` (`built` or `provided`), and with
 `await`, `status` (`success`, `failure` or `error`). When the request was sent, `outcome` is `accepted`,
-`duplicate` or `superseded`. Otherwise it says why not: `skipped`, `entry_gone` (a merge queue build the queue dropped),
-`refused`, `feature_disabled`, `change_agent_closed` (validation was turned off for the pull request), another
-error code from mabl, `failed`, or with `await`, `timed_out`.
+`duplicate` or `superseded`, and with `send: false` it is `comment_only`. Otherwise it says why not: `skipped`,
+`entry_gone` (a merge queue build the queue dropped), `refused`, `feature_disabled`, `change_agent_closed`
+(validation was turned off for the pull request), another error code from mabl, `failed`, or with `await`,
+`timed_out`.
 
 If change validation is off for the workspace, mabl answers `feature_disabled`: the step passes with a notice and
 nothing is validated. With `await`, the commit status is `failure`, so a gate can't pass on a stage nobody judged.
@@ -157,7 +161,9 @@ stage's checks are going. It posts the markdown mabl renders, as is.
   to `comment-wait-minutes`, reading the report every 20 seconds until each application the change reaches has its
   analysis. Give the job `pull-requests: write` and a `timeout-minutes` of at least `comment-wait-minutes` + 5.
 - **On an awaited merge queue entry**, it updates the comment once, after the status is published.
-- **Never on** comment commands, deployed commits, or a request mabl didn't take.
+- **With `send: false`**, on a pull request or comment event, it keeps the comment current the same way, without
+  sending anything.
+- **Never on** deployed commits or a request mabl didn't take, and on a comment event only with `send: false`.
 
 The comment can't change the request's outcome, outputs or commit status: a failed report read or post is a log
 line or one warning, never a failed step. It updates the oldest comment the same token wrote for the same mabl
@@ -167,6 +173,25 @@ leave a duplicate.
 
 A tool that reads the comment should read its hidden data line (`<!-- mabl-change-validation-data {json} -->`), not
 the prose.
+
+### Keeping the comment current without a request
+
+With `send: false` and `comment: true`, the action sends no stage request. It reads mabl's report of the pull
+request and keeps the comment current for up to `comment-wait-minutes`, as it does after a request, and `outcome`
+is `comment_only`. It creates the comment if there is none yet. It runs on `pull_request` (the same actions a
+request is sent for) and `issue_comment` events, and makes the checks a request from the same event would: no
+forks, and on a comment the trigger word and a commenter with write access.
+
+Without a request of its own, it reads the report again just before each write, so it doesn't put back an older
+report than a run that sent a request has just written. If that read fails or names another session, it writes
+nothing and tries again on the next poll. A run that sends and a run with `send: false` for the
+same pull request can still overlap for that one read, so give both a concurrency group per pull request where
+you can.
+
+Use it when your workflow decides not to send, but the comment should still catch up. For example, a workflow
+that sends only a pull request's first commit can still keep the comment current on later pushes, so it
+doesn't stop updating when a push cancelled an earlier run's wait. When mabl has no agent for the pull request
+yet, it posts nothing and logs why.
 
 ### Before turning it on in a public repository
 
@@ -202,6 +227,32 @@ on:
   says.
 - If you call the action yourself, set its `trigger-word`, and keep an `if:` on the job, as the reusable workflow
   does, so other comments don't start a runner.
+
+## Sending only the head you checked
+
+Your workflow may check something about a pull request's head before it sends, such as that a preview
+environment was deployed from that commit. The action fetches the head again when it sends, so a push in between
+would send a commit your check never saw. Pass the commit you checked as `expected-head-sha`:
+
+```yaml
+- uses: mablhq/change-validation-action@v1
+  with:
+    mabl-api-key: ${{ secrets.MABL_API_KEY }}
+    workspace-id: ${{ vars.MABL_WORKSPACE_ID }}
+    stage: pull_request
+    expected-head-sha: ${{ github.event.pull_request.head.sha }}
+```
+
+When the pull request's head is another commit as the request would go out, including after the action reads
+the pull request again because it moved while its files were listed, nothing is sent and `outcome` is `skipped`,
+with a notice. The push's own run sends the new head. It applies to a pull request's stage request and to the
+trigger word alone; a comment command, a merged pull request, a merge queue entry, a deployed commit and
+`send: false` ignore it. A value that isn't a full commit sha fails the run on any event.
+
+An empty value turns the check off, and some expressions are empty on some events:
+`github.event.pull_request.head.sha` is empty on `issue_comment`, so a comment workflow has to look the head up
+itself, for example with the same API call its own check makes. Set `require-expected-head: true` to make an empty
+value fail the run, sending nothing, instead of sending unchecked.
 
 ## Good to know
 
