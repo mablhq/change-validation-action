@@ -1093,6 +1093,7 @@ export async function run({
         print,
         apiUrl: apiUrlOf(env),
         sendStage,
+        queuedPullRequestHead,
       });
     } catch (error) {
       return endWithErrorStatus({env, fetchImpl, signalAfter, print}, `await stopped: ${error?.message ?? error}`);

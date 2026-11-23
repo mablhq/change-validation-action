@@ -46,9 +46,9 @@ const lead = (head, tail) => (head && tail ? `${head}: ${tail}` : head || tail);
 const text = (value) => (typeof value === 'string' ? oneLine(value) : '');
 
 // The gate's view of `stage` in a status answer: {verdict: pass | fail | wait | unreadable,
-// description, link}, plus `waitingOn` for the deadline's message. The api decides it as the stage's
-// `gate`; the checks only pick the description and link. `unreadable` is retried like an answer that
-// isn't JSON.
+// description, link}, plus `waitingOn` for the deadline's message and `headReplaced` when a newer
+// request replaced the head. The api decides it as the stage's `gate`; the checks only pick the
+// description and link. `unreadable` is retried like an answer that isn't JSON.
 export function gateView(answer, stage) {
   const malformed = (what) => ({verdict: 'unreadable', description: `mabl's status answer was malformed: ${what}`});
   if (!isObject(answer) || !Array.isArray(answer.stages)) {
@@ -79,6 +79,9 @@ export function gateView(answer, stage) {
   // Nothing must pass, so the gate passes before anything runs.
   if (verdict === 'pass' && !checks.some((check) => check.must_pass === true)) {
     view.vacuous = true;
+  }
+  if (entry.head_replaced === true) {
+    view.headReplaced = true;
   }
   // A must_pass check with nothing dispatched says why in its own summary, which the stage's leaves out.
   const undispatched = verdict === 'wait' ? text(checks.find((check) => check.must_pass === true && check.status === 'waiting')?.summary) : '';
@@ -191,7 +194,7 @@ export async function endWithErrorStatus({env, fetchImpl, signalAfter, print}, m
   return {exitCode: 1, outputs: {outcome: 'failed', 'session-id': '', created: '', agent: '', 'description-source': '', status}};
 }
 
-export async function awaitStage({env, fetchImpl, sleep, now, signalAfter, invokedAt, print, apiUrl, sendStage}) {
+export async function awaitStage({env, fetchImpl, sleep, now, signalAfter, invokedAt, print, apiUrl, sendStage, queuedPullRequestHead}) {
   const apiKey = env.MABL_API_KEY ?? '';
   const redact = redactor(env);
   const report = (level, message) =>
@@ -311,10 +314,28 @@ export async function awaitStage({env, fetchImpl, sleep, now, signalAfter, invok
     return {exitCode: 0, outputs: {...sent.outputs, status: ''}};
   }
   // The queue dropped this commit, so nothing will merge on its status.
-  if (outcome === 'entry_gone') {
+  const entryGone = () => {
     report('notice', `${context} not published: the merge queue no longer has this commit`);
-    return {exitCode: 0, outputs: {...sent.outputs, status: ''}};
+    return {exitCode: 0, outputs: {...sent.outputs, outcome: 'entry_gone', status: ''}};
+  };
+  if (outcome === 'entry_gone') {
+    return entryGone();
   }
+  // A rebuild's request replaced this head. Stay quiet only when the queue dropped this commit;
+  // otherwise, or when that can't be read, the failure stands.
+  const droppedFromQueue = async () => {
+    try {
+      const number = Number(sent.outputs['pull-request-number']);
+      if (!Number.isInteger(number) || number < 1) {
+        throw new Error('the stage request named no pull request');
+      }
+      const graphqlUrl = env.GITHUB_GRAPHQL_URL || `${github.apiUrl}/graphql`;
+      return (await queuedPullRequestHead({graphqlUrl, repository: github.repository, number, queueSha: target, token: github.token, fetchImpl})) === null;
+    } catch (error) {
+      report('warning', `couldn't read the merge queue entry after its head was replaced: ${error?.message ?? error}`);
+      return false;
+    }
+  };
   if (!POLLED.has(outcome) && outcome !== 'superseded') {
     const late = outcome === 'timed_out' || now() >= overall;
     const why = !late
@@ -365,6 +386,9 @@ export async function awaitStage({env, fetchImpl, sleep, now, signalAfter, invok
         report('notice', `${stage} has no must_pass check, so it passes without waiting for anything to run; give it one to make it a gate`);
       }
       if (view.verdict !== 'wait') {
+        if (view.headReplaced && !isRevision && target && (await droppedFromQueue())) {
+          return entryGone();
+        }
         return conclude(sent, view.verdict === 'pass' ? 'success' : 'failure', view.description, view.link);
       }
       lastWait = view;

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- With `await` on a merge queue entry, when mabl answers that a newer request replaced the commit being waited on
+  and the queue no longer has that commit, the action publishes no conclusion on it, leaves the pull request's
+  comment alone and passes, with `outcome` `entry_gone`, as when the queue drops an entry before sending.
+  Previously it published `failure` on the dropped commit and could leave a failed comment over a rebuild's
+  result. When the queue still has the commit, or the entry can't be read, the failure is published as before.
+
 ## 1.0.3
 
 - Policy: `run_mabl_branch_tests`, an impacted test rule, on by default. Also run the tests created or edited on
