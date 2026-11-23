@@ -19,7 +19,8 @@ applications:
       credentials: '[credentials-id]'
     stages:
       # Both stages run the pull request's mabl branch, so a test fixed on the branch for this change runs as
-      # fixed. match-pr is the default; it's spelled out here to show where the setting goes.
+      # fixed. match-pr is the default; it's spelled out here to show where the setting goes. Each impacted check
+      # also runs the tests the branch created or edited (run_mabl_branch_tests, on by default).
       pull_request:
         mabl_branch: match-pr
         checks:

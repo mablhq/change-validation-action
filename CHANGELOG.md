@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.3
+
+- Policy: `run_mabl_branch_tests`, an impacted test rule, on by default. Also run the tests created or edited on
+  the pull request's mabl branch that the analysis didn't pick, up to 25 per check. The report lists them apart
+  from the analysis's tests.
+
 ## 1.0.2
 
 - `expected-head-sha`: on a pull request's stage request or the trigger word alone, send only if the pull
