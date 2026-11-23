@@ -89,6 +89,7 @@ A dotted key in the table is nested YAML: `exclude.test_labels` is `test_labels`
 | `trusted.test_labels` | List of labels | None | Tests that carry one of these labels run without mabl reading their steps first, including tests that write data. See [Trusted labels](#trusted-labels). |
 | `logins_from` | List of suite names | None | An impacted test logs in with the credentials of its plan in one of these suites. A test with no such plan uses the stage's `credentials`. |
 | `others` | `write-free` | `write-free` | How mabl treats a test without a trusted label. `write-free`, the only value, runs the test only when mabl reads its steps and finds none that write data. |
+| `run_mabl_branch_tests` | `true` or `false` | `true` | Also run the tests created or edited on the pull request's mabl branch that the analysis didn't pick, up to 25 per check. See [Tests on the pull request's mabl branch](#tests-on-the-pull-requests-mabl-branch). |
 
 The rules apply only to impacted tests. A suite check still runs all of its suite's plans, including tests the
 rules leave out. If a suite check in the same stage already runs an impacted test, the test runs once, as part of
@@ -116,6 +117,25 @@ not a guarantee. To keep a test from ever running as an impacted test, give it a
   branch may have changed what it does. To have trusted labels apply to every test, set the stage's `mabl_branch`
   to `master`.
 - mabl doesn't read the flows a cleared test calls, so a flow the branch changes runs without being read.
+
+### Tests on the pull request's mabl branch
+
+When a stage runs on a pull request's [mabl branch](#mabl-branches), its impacted check also takes each test created
+or edited on that branch for the stage's application, whether or not the analysis picked it. Those tests reach
+master when the branch merges, so the check runs them before it merges.
+
+- They pass through the same rules as the analysis's tests: mabl reads their steps, and `include` and `exclude`
+  labels apply. A trusted label doesn't clear them, because each has its own version on the branch.
+  `exclude.median_minutes_over` doesn't apply, since mabl has no run history to judge them by.
+- A stage run takes up to 25 of them, in the branch's order. The report says how many more the branch has.
+- The analysis's tests come first in the limit of 50 impacted tests per stage run.
+- A test the analysis also picked is listed once, as the analysis's, and noted as on the branch.
+- A test whose only change is a flow edited on the branch isn't taken, and neither is a test with no application.
+- A stage that runs on master takes nothing extra.
+
+The report lists these tests apart from the analysis's, and its next steps say how many of the branch's tests won't
+run before the pull request merges, whether a rule dropped them or the limit left them out. To turn this off, set
+`run_mabl_branch_tests: false` under the top-level `impacted` key, or on one impacted check.
 
 ## Applications
 
@@ -221,7 +241,8 @@ commit or a `/mabl` comment. Editing the description alone sends nothing. The st
 its tests ran on.
 
 Use `match-pr` on the stages that gate a change too. A change that needs its tests updated can only pass when the
-gate runs the updated tests, and those live on the branch until the pull request merges.
+gate runs the updated tests, and those live on the branch until the pull request merges. A stage on the branch also
+runs the tests the branch created or edited, as [Tests on the pull request's mabl branch](#tests-on-the-pull-requests-mabl-branch) describes.
 
 > **The pull request's description names the branch.** The next stage request, such as the merge queue entry, runs
 > the branch the description names at that moment, and with `merge_mabl_branches` that branch merges into master.
@@ -255,7 +276,7 @@ change back.
 | `budget_minutes` | No | `50` | Minutes the check may take, from 30 to 120. |
 | `when_nothing_ran` | No | `clear` | The outcome when the analysis succeeds and leaves no test to run. `clear`, the only value, counts the check as passed. |
 | `waiver` | No | None | A mapping with one key, `label`: the pull request label that waives the check, as in `waiver: {label: skip-smoke}`. See [Waivers](#waivers). |
-| `include`, `exclude`, `trusted`, `logins_from`, `others` | No | The top-level `impacted` rules | [Impacted test rules](#impacted-test-rules) for this check only. |
+| `include`, `exclude`, `trusted`, `logins_from`, `others`, `run_mabl_branch_tests` | No | The top-level `impacted` rules | [Impacted test rules](#impacted-test-rules) for this check only. |
 
 ### How mabl counts a check
 
@@ -394,7 +415,8 @@ applies them when it runs a stage.
 
 | Limit | What happens |
 |---|---|
-| 50 impacted tests per stage run | Tests past the 50th, in the analysis's order, don't run. |
+| 50 impacted tests per stage run | Tests past the 50th don't run: the analysis's tests in its order, then the mabl branch's. |
+| 25 tests from a pull request's mabl branch per impacted check | The rest aren't taken. The report counts them. |
 | 50 plans across a stage's suite checks | The stage doesn't run. |
 | 200 plans carrying the plan labels a stage uses, in its suite checks, `include.suites`, and `logins_from` | The stage doesn't run. |
 | An analysis more than 24 hours old | The stage doesn't run until the change is analyzed again. |
