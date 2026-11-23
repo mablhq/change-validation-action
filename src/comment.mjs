@@ -6,7 +6,7 @@ import {readFileSync} from 'node:fs';
 
 import {escapeInvisible} from './lib/policy-read.mjs';
 import {apiUrlOf, basicAuthorization} from './lib/mabl-api.mjs';
-import {MAX_ANNOTATION_CHARS, MINUTE_MS, TITLE, isObject, redactor, repositoryIdOf} from './lib/shared.mjs';
+import {MAX_ANNOTATION_CHARS, MINUTE_MS, TAKEN, TITLE, isObject, redactor, repositoryIdOf} from './lib/shared.mjs';
 import {annotation, shorten} from './lib/workflow-commands.mjs';
 
 export const REPORT_PATH = '/changeValidation/report';
@@ -20,7 +20,6 @@ const DEFAULT_WAIT_MINUTES = 15;
 const REQUEST_TIMEOUT_MS = 30_000;
 const COMMENTS_PER_PAGE = 100;
 const MAX_COMMENT_PAGES = 30;
-const TAKEN = new Set(['accepted', 'duplicate']);
 
 const firstLine = (text) => String(text).split(/\r?\n/, 1)[0];
 const sameBody = (a, b) => String(a).replace(/\r\n/g, '\n').trimEnd() === String(b).replace(/\r\n/g, '\n').trimEnd();
@@ -33,7 +32,8 @@ const UPDATE_MUTATION = 'mutation($id: ID!, $body: String!) { updateIssueComment
 const sendsNothing = (env) => String(env.CHANGE_VALIDATION_SEND ?? '').trim() === 'false';
 
 // `wait` on a pull request's own stage request mabl took, or on a pull request or comment event with
-// send: 'false'; `once` after an awaited merge queue entry's status was published; otherwise null.
+// send: 'false'; `merged` after a merged event mabl took; `once` after an awaited merge queue entry's
+// status was published; otherwise null.
 export function commentPlan({env, payload}) {
   if (String(env.CHANGE_VALIDATION_COMMENT ?? '').trim().toLowerCase() !== 'true' || !/^[1-9][0-9]*$/.test(String(env.PULL_REQUEST_NUMBER ?? ''))) {
     return null;
@@ -45,7 +45,10 @@ export function commentPlan({env, payload}) {
   if (env.CHANGE_VALIDATION_AWAIT === 'true') {
     return eventName === 'merge_group' && String(env.CHANGE_VALIDATION_STATUS ?? '') !== '' ? 'once' : null;
   }
-  return eventName === 'pull_request' && payload?.action !== 'closed' && TAKEN.has(env.CHANGE_VALIDATION_OUTCOME) ? 'wait' : null;
+  if (eventName !== 'pull_request' || !TAKEN.has(env.CHANGE_VALIDATION_OUTCOME)) {
+    return null;
+  }
+  return payload?.action === 'closed' ? 'merged' : 'wait';
 }
 
 // The mabl agent's session_id on a comment's data line, or null. A workspace has one agent per pull
@@ -229,7 +232,10 @@ export async function main({env = process.env, fetchImpl = fetch, sleep = (ms) =
   const minutesText = String(env.COMMENT_WAIT_MINUTES ?? '').trim();
   const minutes = /^[0-9]+$/.test(minutesText) ? Number(minutesText) : DEFAULT_WAIT_MINUTES;
   const deadline = now() + minutes * MINUTE_MS;
-  for (;;) {
+  // A merged pull request's comment is read and posted again after one interval: a merge queue run that
+  // read the report before the merge may post after this run's first write, and a single read may fail.
+  const maxReads = {once: 1, merged: 2}[plan] ?? Infinity;
+  for (let reads = 1; ; reads += 1) {
     const answer = await readReport({apiUrl, apiKey, request, fetchImpl});
     const ok = answer.status >= 200 && answer.status < 300;
     const reason = ok ? unreadableReason(answer.body) : null;
@@ -264,16 +270,16 @@ export async function main({env = process.env, fetchImpl = fetch, sleep = (ms) =
         }
         log(`${commentLabel}: not posted this time (${error.message})`);
       }
-      if (plan === 'once' || (posted && analysesFinished(latestReport))) {
+      if (plan === 'wait' && posted && analysesFinished(latestReport)) {
         return;
       }
     } else {
       log(`${commentLabel}: skipped a read, mabl answered ${ok ? reason : describeAnswer(answer)}`);
     }
-    if (plan === 'once' || now() >= deadline) {
+    if (reads >= maxReads || (plan === 'wait' && now() >= deadline)) {
       log(`${commentLabel}: stopped`);
       return;
     }
-    await sleep(Math.min(POLL_INTERVAL_MS, deadline - now()));
+    await sleep(plan === 'wait' ? Math.min(POLL_INTERVAL_MS, deadline - now()) : POLL_INTERVAL_MS);
   }
 }

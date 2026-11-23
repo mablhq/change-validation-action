@@ -314,7 +314,9 @@ merge_mabl_branches: true
   a **Command Line Interface** key made for this workflow, on an account with mabl branching. An **Editor** key can't, and gets
   `principal_too_narrow`.
 - The pull request's status reports what happened to the branch: `merged`, `left` (the policy doesn't merge
-  branches), `nothing_to_merge`, `diverged`, `not_open`, or `failed`.
+  branches), `nothing_to_merge`, `diverged`, `not_open`, or `failed`. The action logs it on the merged pull
+  request's run, and the pull request comment shows it. `diverged` and `failed` fail that run, so someone finishes
+  the merge by hand. See [When a pull request merges](../README.md#when-a-pull-request-merges).
 
 ## Check a policy file
 
