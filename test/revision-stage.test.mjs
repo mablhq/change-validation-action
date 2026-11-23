@@ -509,6 +509,23 @@ describe('await mode on a revision', () => {
     assert.ok(stubbed.calls.some((call) => call.url.pathname === STATUS_PATH));
   });
 
+  it('publishes failure on a replaced head, with no merge queue lookup', async () => {
+    const replaced = json(200, {
+      status: 'complete',
+      summary: 'release: failed (head replaced)',
+      stages: [{stage: 'release', gate: 'fail', summary: 'release: failed (head replaced)', head_sha: C1, head_replaced: true, checks: []}],
+    });
+    const stubbed = stub({statuses: [replaced]});
+    const {exitCode, outputs} = await runWith('push', tagPush, stubbed, {CHANGE_VALIDATION_AWAIT: 'true', STATUS_CONTEXT: CONTEXT});
+
+    assert.equal(exitCode, 1);
+    assert.equal(outputs.outcome, 'accepted');
+    assert.equal(outputs.status, 'failure');
+    const posts = stubbed.calls.filter((call) => call.url.pathname.startsWith('/repos/Org/Repo/statuses/')).map((call) => JSON.parse(call.body));
+    assert.deepEqual(posts.at(-1), {state: 'failure', context: CONTEXT, description: 'release: failed (head replaced)', target_url: 'https://github.com/Org/Repo/actions/runs/555'});
+    assert.ok(!stubbed.calls.some((call) => call.url.pathname === '/graphql' && call.body.includes('mergeQueueEntry')));
+  });
+
   it("publishes nothing for a deployment that hasn't succeeded", async () => {
     const stubbed = stub();
     const {exitCode, outputs} = await runWith('deployment_status', {deployment: {sha: HEAD}, deployment_status: {state: 'in_progress'}}, stubbed, {

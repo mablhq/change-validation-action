@@ -140,7 +140,9 @@ Outputs: `outcome`, `session-id`, `created`, `agent`, `description-source` (`bui
 `duplicate` or `superseded`, and with `send: false` it is `comment_only`. Otherwise it says why not: `skipped`,
 `entry_gone` (a merge queue build the queue dropped), `refused`, `feature_disabled`, `change_agent_closed`
 (validation was turned off for the pull request), another error code from mabl, `failed`, or with `await`,
-`timed_out`.
+`timed_out`. With `await`, `entry_gone` also follows a sent request: when a rebuild of the entry replaced the
+commit being waited on and the queue no longer has that commit, the action publishes no conclusion, leaves the
+comment alone and passes.
 
 If change validation is off for the workspace, mabl answers `feature_disabled`: the step passes with a notice and
 nothing is validated. With `await`, the commit status is `failure`, so a gate can't pass on a stage nobody judged.

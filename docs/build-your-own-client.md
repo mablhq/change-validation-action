@@ -172,7 +172,9 @@ response's `event` says what became of each one:
   ask again on `wait`, about every 20 seconds, until your own deadline.
 - A stage with no `must_pass` check is `ready` at once, even while its tests run.
 - `head_replaced: true` means a newer request replaced the commit you named. The gate is `fail`: the result you
-  were waiting for no longer applies.
+  were waiting for no longer applies. For a merge queue entry, check whether the queue still has the commit: if it
+  dropped it, publish nothing and leave the pull request's comment alone, since a rebuild of the entry owns them
+  now. If it still has the commit, or you can't tell, publish the failure.
 - When nothing was published by your deadline, publish a failure, so a required status doesn't stay pending.
 - When your own step stops without a result, on an input it can't use or an unexpected error, publish `error`
   instead. Otherwise the status stays pending, or an earlier one for the same commit stays in place.

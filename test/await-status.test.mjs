@@ -5,6 +5,8 @@ import {join} from 'node:path';
 import {describe, it} from 'node:test';
 
 import {EVENTS_PATH, RESOLVE_PATH, run} from '../src/stage-request.mjs';
+import {commentPlan} from '../src/comment.mjs';
+import {action} from '../src/main.mjs';
 import {DEFAULT_API_URL} from '../src/lib/mabl-api.mjs';
 import {
   CONCLUSION_RESERVE_MS,
@@ -85,7 +87,8 @@ const statusOf = ({gate = 'ready', stage = {}, checks = [check(), smoke()], summ
 // and the timeouts `signalAfter` hands out abort when it passes them. A request whose signal aborts
 // throws as fetch does, unless its answer `ignoresAbort`; `stuck[path]` hangs that long whatever
 // its signal says. `statuses` answers each status read in
-// order, the last repeating; `published` answers each commit status post the same way.
+// order, the last repeating; `published` answers each commit status post the same way, and `graphql`,
+// when a list, each GraphQL read.
 function stub({events = [ACCEPTED], statuses = [json(200, statusOf())], published = [{status: 201}], graphql, slow = {}, stuck = {}, clockStart}) {
   const calls = [];
   // The timeout each events attempt and status read was given, in order; then each publish attempt's.
@@ -116,6 +119,7 @@ function stub({events = [ACCEPTED], statuses = [json(200, statusOf())], publishe
   const eventAnswers = [...events];
   const statusAnswers = [...statuses];
   const publishAnswers = [...published];
+  const graphqlAnswers = Array.isArray(graphql) ? [...graphql] : null;
   const next = (list) => (list.length > 1 ? list.shift() : list[0]);
   const fetchImpl = async (url, init = {}) => {
     const parsed = new URL(url);
@@ -137,7 +141,7 @@ function stub({events = [ACCEPTED], statuses = [json(200, statusOf())], publishe
     } else if (parsed.origin === GITHUB_API && path.startsWith('/repos/Org/Repo/git/commits/')) {
       answer = json(200, {sha: QUEUE_HEAD, parents: [{sha: QUEUE_PARENT}]});
     } else if (parsed.origin === GITHUB_API && path === '/graphql') {
-      answer = graphql ?? json(200, {data: {repository: {pullRequest: {headRefOid: HEAD, mergeQueueEntry: {headCommit: {oid: QUEUE_HEAD}}}}}});
+      answer = graphqlAnswers ? next(graphqlAnswers) : graphql ?? json(200, {data: {repository: {pullRequest: {headRefOid: HEAD, mergeQueueEntry: {headCommit: {oid: QUEUE_HEAD}}}}}});
     } else if (parsed.origin === GITHUB_API && path === '/repos/Org/Repo/collaborators/dev/permission') {
       answer = json(200, {permission: 'write'});
     } else if (parsed.origin === GITHUB_API && path.startsWith('/repos/Org/Repo/statuses/')) {
@@ -195,12 +199,14 @@ function stub({events = [ACCEPTED], statuses = [json(200, statusOf())], publishe
   };
 }
 
-async function awaitWith(eventName, payload, stubbed, env = {}) {
+// `entry` runs the action's entrypoint instead, recording what it hands the comment step.
+async function awaitWith(eventName, payload, stubbed, env = {}, {entry = false} = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'change-agent-await-'));
   const eventPath = join(dir, 'event.json');
   writeFileSync(eventPath, JSON.stringify(payload));
   const lines = [];
-  const result = await run({
+  const commented = [];
+  const result = await (entry ? action : run)({
     env: {
       GITHUB_EVENT_NAME: eventName,
       GITHUB_EVENT_PATH: eventPath,
@@ -222,8 +228,15 @@ async function awaitWith(eventName, payload, stubbed, env = {}) {
     now: stubbed.now,
     signalAfter: stubbed.signalAfter,
     print: (line) => lines.push(line),
+    ...(entry
+      ? {
+          comment: async ({env: handed}) => {
+            commented.push(handed);
+          },
+        }
+      : {}),
   });
-  return {...result, lines};
+  return {...result, lines, commented};
 }
 
 // A queue entry whose stage request goes out 8 minutes after it started, after the preview deploys.
@@ -511,6 +524,65 @@ describe('await mode on a merge queue entry', () => {
     assert.deepEqual(gone.published(), []);
     assert.equal(gone.reads().length, 0);
     assert.ok(lines.some((line) => line.startsWith('::notice') && line.includes('no longer has this commit')));
+  });
+
+  describe('when a newer build replaced the head it was waiting on', () => {
+    const NEWER_HEAD = 'c'.repeat(40);
+    const replaced = json(
+      200,
+      statusOf({gate: 'fail', summary: 'merge_queue: failed (head replaced)', checks: [], stage: {head_sha: NEWER_HEAD, head_replaced: true}}),
+    );
+    const entryAt = (oid) => json(200, {data: {repository: {pullRequest: {headRefOid: HEAD, mergeCommit: null, mergeQueueEntry: oid ? {headCommit: {oid}} : null}}}});
+    const lookups = (stubbed) => stubbed.calls.filter((call) => call.url.pathname === '/graphql');
+    const awaitReplaced = (graphql) => {
+      const stubbed = queueStub({statuses: [replaced], graphql});
+      return awaitWith('merge_group', mergeGroup, stubbed, {CHANGE_VALIDATION_COMMENT: 'true'}, {entry: true}).then((result) => ({...result, stubbed}));
+    };
+
+    it("publishes no conclusion and leaves the comment alone when the queue dropped this commit", async () => {
+      const {exitCode, outputs, lines, commented, stubbed} = await awaitReplaced([entryAt(QUEUE_HEAD), entryAt(NEWER_HEAD)]);
+
+      assert.equal(exitCode, 0);
+      assert.equal(outputs.outcome, 'entry_gone');
+      assert.equal(outputs.status, '');
+      assert.equal(lookups(stubbed).length, 2);
+      assert.deepEqual(
+        stubbed.published().map(({state}) => state),
+        ['pending'],
+      );
+      assert.ok(lines.some((line) => line.startsWith('::notice') && line.includes('no longer has this commit')));
+      assert.ok(!lines.some((line) => line.startsWith('::error')));
+      assert.equal(commented.length, 1);
+      assert.equal(commentPlan({env: commented[0], payload: mergeGroup}), null);
+    });
+
+    it('fails as before when the entry is still at this commit', async () => {
+      const {exitCode, outputs, commented, stubbed} = await awaitReplaced([entryAt(QUEUE_HEAD)]);
+
+      assert.equal(exitCode, 1);
+      assert.equal(outputs.outcome, 'accepted');
+      assert.equal(outputs.status, 'failure');
+      assert.equal(lookups(stubbed).length, 2);
+      assert.deepEqual(
+        stubbed.published().map(({state, description}) => [state, description]),
+        [
+          ['pending', 'waiting for merge_queue'],
+          ['failure', 'merge_queue: failed (head replaced)'],
+        ],
+      );
+      assert.equal(commentPlan({env: commented[0], payload: mergeGroup}), 'once');
+    });
+
+    it("fails as before when the entry can't be read", async () => {
+      const {exitCode, outputs, lines, commented, stubbed} = await awaitReplaced([entryAt(QUEUE_HEAD), {throws: 'network down'}]);
+
+      assert.equal(exitCode, 1);
+      assert.equal(outputs.outcome, 'accepted');
+      assert.equal(outputs.status, 'failure');
+      assert.equal(last(stubbed.published()).state, 'failure');
+      assert.ok(lines.some((line) => line.startsWith('::warning') && line.includes('network down')));
+      assert.equal(commentPlan({env: commented[0], payload: mergeGroup}), 'once');
+    });
   });
 
   it('retries a malformed answer like an unreadable one, then fails saying so', async () => {

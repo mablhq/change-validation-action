@@ -89,7 +89,7 @@ inputs:
     default: ${{ github.token }}
 outputs:
   outcome:
-    description: "accepted, duplicate or superseded when sent; comment_only with send 'false'; skipped, entry_gone (a merge queue build the queue dropped), refused, feature_disabled, change_agent_closed (validation was turned off for this pull request), another error code, or failed otherwise; with await, also timed_out when the time ran out just before sending"
+    description: "accepted, duplicate or superseded when sent; comment_only with send 'false'; skipped, entry_gone (a merge queue build the queue dropped, before sending or, with await, while waiting), refused, feature_disabled, change_agent_closed (validation was turned off for this pull request), another error code, or failed otherwise; with await, also timed_out when the time ran out just before sending"
   session-id:
     description: "The mabl agent session for the pull request or commit; empty unless sent"
   created:
