@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `expected-head-sha`: on a pull request's stage request or the trigger word alone, send only if the pull
+  request's head is still the commit the caller checked; otherwise nothing is sent and `outcome` is `skipped`.
+  Closes the gap between a workflow's own check of a head, such as a deployed preview, and the request. Empty
+  turns the check off; `require-expected-head: true` makes an empty value fail instead. A malformed value fails
+  the run on any event.
+- `send: false`, with `comment: true`: send no stage request and keep the pull request's comment current from
+  mabl's report, on `pull_request` and `issue_comment`, for up to `comment-wait-minutes`. `outcome` is
+  `comment_only`. It reads the report again just before each write, and writes nothing that poll when that read
+  fails or names another session. Every existing input combination behaves as before.
 - On a merged pull request, the action logs what became of its mabl branch: `merged`, `nothing_to_merge`,
   `not_open` and `left` as notices, an outcome it doesn't know as a warning, and `diverged` and `failed` as errors,
   naming the branch and, for `diverged`, the tests and flows master moved past. The outcome comes from `landed` in

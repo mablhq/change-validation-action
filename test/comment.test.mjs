@@ -489,6 +489,129 @@ describe('when the comment step posts nothing', () => {
   });
 });
 
+describe("the comment with send 'false'", () => {
+  const COMMENT_ONLY = {CHANGE_VALIDATION_SEND: 'false', CHANGE_VALIDATION_OUTCOME: 'comment_only'};
+
+  for (const [eventName, payload] of [
+    ['pull_request', {action: 'synchronize'}],
+    ['issue_comment', {action: 'created', issue: {number: 7, pull_request: {url: 'x'}}}],
+  ]) {
+    it(`keeps the comment current on ${eventName}, reading the report again before each write`, async () => {
+      const analysing = json(200, reportOf({text: 'analysing'}));
+      const stubbed = stub({
+        reports: [analysing, analysing, analysing, json(200, reportOf({analysed: [true], text: 'done'}))],
+        comments: [{id: 'IC_1', body: bodyOf('older', 's1-as'), author: OURS}],
+      });
+      const lines = await step(stubbed, {...COMMENT_ONLY, GITHUB_EVENT_NAME: eventName}, payload);
+
+      assert.equal(stubbed.reads().length, 5);
+      assert.equal(stubbed.creates().length, 0);
+      assert.equal(stubbed.updates().length, 2);
+      assert.equal(stubbed.store[0].body, bodyOf('done', 's1-as'));
+      assert.deepEqual(stubbed.reads()[0].body, {
+        workspace_id: 'ws-w',
+        reference: {type: 'pull_request', id: 'github.com/org/repo#7'},
+        trusted_providers: 'caller',
+        format: 'markdown',
+      });
+      assert.deepEqual(warnings(lines), []);
+    });
+  }
+
+  it('stops at comment-wait-minutes', async () => {
+    const stubbed = stub({reports: [json(200, reportOf({text: 'analysing'}))]});
+    await step(stubbed, {...COMMENT_ONLY, COMMENT_WAIT_MINUTES: '2'});
+
+    // Each poll reads once; only the first, which creates the comment, reads again before its write.
+    assert.equal(stubbed.reads().length, 2 + (2 * MINUTE) / POLL_INTERVAL_MS);
+  });
+
+  it('writes the report read just before the write, not an older one read first', async () => {
+    const stubbed = stub({
+      reports: [json(200, reportOf({analysed: [true], text: 'stale'})), json(200, reportOf({analysed: [true], text: 'final'}))],
+      comments: [{id: 'IC_1', body: bodyOf('final', 's1-as'), author: OURS}],
+    });
+    await step(stubbed, COMMENT_ONLY);
+
+    assert.equal(stubbed.reads().length, 2);
+    assert.equal(stubbed.updates().length, 0);
+    assert.equal(stubbed.store[0].body, bodyOf('final', 's1-as'));
+  });
+
+  it('writes nothing, and reads again later, when the second read fails or names another session', async () => {
+    for (const second of [json(500, {}), {throws: 'socket hang up'}, json(200, {}), json(200, reportOf({analysed: [true], text: 'other', session: 's2-as'}))]) {
+      const stubbed = stub({
+        reports: [json(200, reportOf({analysed: [true], text: 'stale'})), second, json(200, reportOf({analysed: [true], text: 'newer'}))],
+        comments: [{id: 'IC_1', body: bodyOf('newer', 's1-as'), author: OURS}],
+      });
+      const lines = await step(stubbed, COMMENT_ONLY);
+
+      assert.equal(stubbed.updates().length, 0, JSON.stringify(second));
+      assert.equal(stubbed.creates().length, 0, JSON.stringify(second));
+      assert.equal(stubbed.store[0].body, bodyOf('newer', 's1-as'));
+      assert.ok(lines.some((line) => line.includes('not posted this time')), JSON.stringify(second));
+      assert.deepEqual(warnings(lines), []);
+    }
+  });
+
+  it('starts over with the new report when the session changed between reads', async () => {
+    const s2 = json(200, reportOf({analysed: [true], text: 'second', session: 's2-as'}));
+    const stubbed = stub({
+      reports: [json(200, reportOf({analysed: [true], text: 'old'})), s2],
+      comments: [{id: 'IC_1', body: bodyOf('older', 's1-as'), author: OURS}],
+    });
+    await step(stubbed, COMMENT_ONLY);
+
+    assert.equal(stubbed.store[0].body, bodyOf('older', 's1-as'));
+    assert.equal(stubbed.creates().length, 1);
+    assert.equal(stubbed.store[1].body, bodyOf('second', 's2-as'));
+  });
+
+  it('creates the comment when the pull request has none yet', async () => {
+    const stubbed = stub({reports: [DONE]});
+    await step(stubbed, COMMENT_ONLY);
+
+    assert.equal(stubbed.creates().length, 1);
+  });
+
+  it('logs, without a warning, when mabl has no agent for the pull request yet', async () => {
+    const stubbed = stub({reports: [json(404, {error_code: 'no_change_agent', message: 'no agent'})]});
+    const lines = await step(stubbed, COMMENT_ONLY);
+
+    assert.equal(stubbed.reads().length, 1);
+    assert.deepEqual(warnings(lines), []);
+    assert.ok(lines.includes("pull request #7's comment: not posted, mabl has no report for it yet"));
+  });
+
+  it('still warns on any other 4xx', async () => {
+    const stubbed = stub({reports: [json(403, {error_code: 'forbidden', message: 'no'})]});
+    const lines = await step(stubbed, COMMENT_ONLY);
+
+    assert.equal(warnings(lines).length, 1);
+  });
+
+  it('reads nothing when the run did not name a pull request to keep current, or on another event', async () => {
+    for (const env of [
+      {...COMMENT_ONLY, CHANGE_VALIDATION_OUTCOME: 'refused'},
+      {...COMMENT_ONLY, CHANGE_VALIDATION_OUTCOME: 'failed'},
+      {...COMMENT_ONLY, GITHUB_EVENT_NAME: 'merge_group'},
+      {...COMMENT_ONLY, CHANGE_VALIDATION_COMMENT: 'false'},
+    ]) {
+      const stubbed = stub();
+      await step(stubbed, env);
+      assert.equal(stubbed.calls.length, 0, JSON.stringify(env));
+    }
+  });
+
+  it('keeps no comment after a sent issue_comment request', async () => {
+    for (const send of ['', 'true']) {
+      const stubbed = stub();
+      await step(stubbed, {GITHUB_EVENT_NAME: 'issue_comment', CHANGE_VALIDATION_SEND: send}, {action: 'created'});
+      assert.equal(stubbed.calls.length, 0, send);
+    }
+  });
+});
+
 describe('what the step sends and prints', () => {
   it("escapes line breaks and invisible characters in mabl's answers, so no answer can forge a workflow command", async () => {
     const forged = `x\n::error::forged\r\n%0A \u202e`;

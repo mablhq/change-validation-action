@@ -73,6 +73,9 @@ with `principal_gone` until the change is reset.
   request's git branch. This action reads it from a `Mabl branch: <name>` line in the description.
 - Send a new request when the pull request opens, gets a new commit, or changes its base branch. An edit to the
   title or description alone needs no request.
+- If your client checks something about the head before it sends, such as a deployed preview, compare the head
+  you fetch at sending with the one you checked, and send nothing when they differ. The action's
+  `expected-head-sha` input does this.
 
 ## A merge queue entry
 
@@ -184,4 +187,6 @@ response's `event` says what became of each one:
 - Its second line is `<!-- mabl-change-validation-data {json} -->`. A tool that reads the comment should read that
   line, not the prose.
 - The report is worked out on every call. Ask again when an analysis finishes or a stage's checks finish.
+- The report is read by the pull request's `reference` alone, so a client can keep the comment current without
+  sending a stage request. A pull request mabl has no agent for answers 404 `no_change_agent`.
 - A failed report read or post should never fail the step or change the status.
