@@ -141,4 +141,34 @@ describe('the action', () => {
     assert.equal(calls[0].PULL_REQUEST_NUMBER, '7');
     assert.equal(commentPlan({env: calls[0], payload: mergeGroup}), 'once');
   });
+
+  it("hands the comment a pull request to keep current with send 'false', having sent nothing", async () => {
+    const payload = {action: 'synchronize', pull_request: {number: 7, head: {sha: HEAD, repo: {id: 1}}, base: {repo: {id: 1}}}};
+    const {event, output} = files(payload);
+    const calls = [];
+    const {exitCode, outputs} = await action({
+      env: {
+        GITHUB_EVENT_NAME: 'pull_request',
+        GITHUB_EVENT_PATH: event,
+        GITHUB_OUTPUT: output,
+        GITHUB_REPOSITORY: 'Org/Repo',
+        MABL_API_KEY: 'mabl-key',
+        MABL_WORKSPACE_ID: 'ws-w',
+        CHANGE_VALIDATION_SEND: 'false',
+        CHANGE_VALIDATION_COMMENT: 'true',
+      },
+      fetchImpl: fetchNothing,
+      print: () => {},
+      comment: async ({env}) => {
+        calls.push(env);
+      },
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(outputs.outcome, 'comment_only');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].PULL_REQUEST_NUMBER, '7');
+    assert.equal(commentPlan({env: calls[0], payload}), 'wait');
+    assert.match(readFileSync(output, 'utf8'), /^outcome<<ghadelimiter_[0-9a-f-]+\ncomment_only\n/);
+  });
 });

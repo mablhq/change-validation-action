@@ -1492,3 +1492,275 @@ describe('inputs', () => {
     }
   });
 });
+
+describe('expected-head-sha', () => {
+  const NEW_HEAD = 'd'.repeat(40);
+  const movedTo = (sha) => pullRequest({head: {...pullRequest().head, sha}});
+
+  it('sends when the pull request is at the expected head, in any case', async () => {
+    const stubbed = stub();
+    const {exitCode, outputs} = await runWith('pull_request', prEvent('synchronize'), stubbed, {CHANGE_VALIDATION_EXPECTED_HEAD_SHA: ` ${HEAD.toUpperCase()} `});
+
+    assert.equal(exitCode, 0);
+    assert.equal(outputs.outcome, 'accepted');
+    assert.equal(stubbed.sent()[0].event.head_sha, HEAD);
+  });
+
+  it('sends nothing when the pull request has moved on from the expected head', async () => {
+    const stubbed = stub({pr: movedTo(NEW_HEAD)});
+    const {exitCode, outputs, lines} = await runWith('pull_request', prEvent('synchronize'), stubbed, {CHANGE_VALIDATION_EXPECTED_HEAD_SHA: HEAD});
+
+    assert.equal(exitCode, 0);
+    assert.equal(outputs.outcome, 'skipped');
+    assert.equal(outputs['pull-request-number'], '');
+    assert.equal(stubbed.mablCalls().length, 0);
+    assert.equal(stubbed.fileCalls().length, 0);
+    assert.ok(lines.some((line) => line.startsWith('::notice') && line.includes(`head is ${NEW_HEAD}, not the expected ${HEAD}`)));
+  });
+
+  it('sends nothing when a push lands at another head while the files are listed', async () => {
+    const stubbed = stub({pr: [pullRequest(), movedTo(NEW_HEAD)]});
+    const {exitCode, outputs} = await runWith('pull_request', prEvent('opened'), stubbed, {CHANGE_VALIDATION_EXPECTED_HEAD_SHA: HEAD});
+
+    assert.equal(exitCode, 0);
+    assert.equal(outputs.outcome, 'skipped');
+    assert.equal(stubbed.fileCalls().length, 1);
+    assert.equal(stubbed.mablCalls().length, 0);
+  });
+
+  it('applies to the trigger word alone', async () => {
+    const stubbed = stub({pr: movedTo(NEW_HEAD)});
+    const {outputs} = await runWith('issue_comment', commentEvent('MEMBER'), stubbed, {CHANGE_VALIDATION_COMMAND: '', CHANGE_VALIDATION_EXPECTED_HEAD_SHA: HEAD});
+
+    assert.equal(outputs.outcome, 'skipped');
+    assert.equal(stubbed.mablCalls().length, 0);
+  });
+
+  it('is ignored by a command and by a merged pull request', async () => {
+    const command = stub({pr: movedTo(NEW_HEAD), mabl: [json(200, {session_id: 's1-as', created: false, event: 'accepted', agent: 'working'})]});
+    const sent = await runWith('issue_comment', commentEvent('MEMBER'), command, {CHANGE_VALIDATION_COMMAND: 'look again', CHANGE_VALIDATION_EXPECTED_HEAD_SHA: HEAD});
+    assert.equal(sent.outputs.outcome, 'accepted');
+    assert.equal(command.sent()[0].event.kind, 'command');
+
+    const merged = stub({mabl: [json(200, {session_id: 's1-as', created: false, event: 'accepted', agent: 'working'})]});
+    const told = await runWith('pull_request', closedEvent(), merged, {CHANGE_VALIDATION_STAGE: '', CHANGE_VALIDATION_EXPECTED_HEAD_SHA: NEW_HEAD});
+    assert.equal(told.outputs.outcome, 'accepted');
+  });
+
+  for (const [label, eventName, payload, env] of [
+    ['a stage request', 'pull_request', prEvent('opened'), {}],
+    ['a merge queue entry', 'merge_group', {action: 'checks_requested'}, {CHANGE_VALIDATION_STAGE: 'merge_queue'}],
+    ['a command', 'issue_comment', commentEvent('MEMBER'), {CHANGE_VALIDATION_COMMAND: 'look again'}],
+    ['a merged pull request', 'pull_request', closedEvent(), {CHANGE_VALIDATION_STAGE: ''}],
+    ['an action not sent', 'pull_request', prEvent('labeled'), {}],
+    ["send: 'false'", 'pull_request', prEvent('synchronize', {pull_request: pullRequest()}), {CHANGE_VALIDATION_SEND: 'false', CHANGE_VALIDATION_COMMENT: 'true'}],
+  ]) {
+    it(`fails, calling nothing, when it is not a commit sha, even on ${label}`, async () => {
+      const stubbed = stub();
+      const {exitCode, outputs, lines} = await runWith(eventName, payload, stubbed, {...env, CHANGE_VALIDATION_EXPECTED_HEAD_SHA: 'abc1234'});
+
+      assert.equal(exitCode, 1);
+      assert.equal(outputs.outcome, 'failed');
+      assert.equal(stubbed.calls.length, 0);
+      assert.match(lines.join('\n'), /expected-head-sha has to be a 40-character commit sha/);
+    });
+  }
+
+  it('publishes error, with await, when it is not a commit sha', async () => {
+    const statuses = [];
+    const stubbed = stub();
+    const fetchImpl = async (url, init = {}) => {
+      if (new URL(url).pathname.startsWith('/repos/Org/Repo/statuses/')) {
+        statuses.push(JSON.parse(init.body));
+        return new Response('{}', {status: 201});
+      }
+      return stubbed.fetchImpl(url, init);
+    };
+    const {exitCode, outputs} = await runWith('merge_group', {action: 'checks_requested', merge_group: {head_sha: HEAD}}, {fetchImpl}, {
+      CHANGE_VALIDATION_STAGE: 'merge_queue',
+      CHANGE_VALIDATION_AWAIT: 'true',
+      STATUS_CONTEXT: 'ctx',
+      CHANGE_VALIDATION_EXPECTED_HEAD_SHA: 'nope',
+    });
+
+    assert.equal(exitCode, 1);
+    assert.equal(outputs.status, 'error');
+    assert.equal(statuses.length, 1);
+    assert.equal(statuses[0].state, 'error');
+  });
+});
+
+describe('require-expected-head', () => {
+  const REQUIRE = {CHANGE_VALIDATION_REQUIRE_EXPECTED_HEAD: 'true'};
+
+  for (const [label, eventName, payload, env] of [
+    ['a pull request', 'pull_request', prEvent('synchronize'), {}],
+    ['the trigger word alone', 'issue_comment', commentEvent('MEMBER'), {CHANGE_VALIDATION_COMMAND: ''}],
+  ]) {
+    for (const value of ['', '   ']) {
+      it(`fails, calling nothing, on ${label} when expected-head-sha is ${JSON.stringify(value)}`, async () => {
+        const stubbed = stub();
+        const {exitCode, outputs, lines} = await runWith(eventName, payload, stubbed, {...env, ...REQUIRE, CHANGE_VALIDATION_EXPECTED_HEAD_SHA: value});
+
+        assert.equal(exitCode, 1);
+        assert.equal(outputs.outcome, 'failed');
+        assert.equal(stubbed.calls.length, 0);
+        assert.match(lines.join('\n'), /require-expected-head is true, but expected-head-sha is empty/);
+      });
+    }
+  }
+
+  it('sends at the expected head when one is given', async () => {
+    const stubbed = stub();
+    const {outputs} = await runWith('pull_request', prEvent('synchronize'), stubbed, {...REQUIRE, CHANGE_VALIDATION_EXPECTED_HEAD_SHA: HEAD});
+
+    assert.equal(outputs.outcome, 'accepted');
+  });
+
+  it('sends unchecked when expected-head-sha is empty and not required', async () => {
+    for (const require of ['', 'false']) {
+      const stubbed = stub();
+      const {outputs} = await runWith('pull_request', prEvent('synchronize'), stubbed, {CHANGE_VALIDATION_REQUIRE_EXPECTED_HEAD: require});
+      assert.equal(outputs.outcome, 'accepted', require);
+    }
+  });
+
+  it('does not apply to a command or a merged pull request', async () => {
+    const command = stub({mabl: [json(200, {session_id: 's1-as', created: false, event: 'accepted', agent: 'working'})]});
+    const sent = await runWith('issue_comment', commentEvent('MEMBER'), command, {...REQUIRE, CHANGE_VALIDATION_COMMAND: 'look again'});
+    assert.equal(sent.outputs.outcome, 'accepted');
+
+    const merged = stub({mabl: [json(200, {session_id: 's1-as', created: false, event: 'accepted', agent: 'working'})]});
+    const told = await runWith('pull_request', closedEvent(), merged, {...REQUIRE, CHANGE_VALIDATION_STAGE: ''});
+    assert.equal(told.outputs.outcome, 'accepted');
+  });
+
+  it("fails on a value other than 'true' or 'false'", async () => {
+    const stubbed = stub();
+    const {exitCode} = await runWith('pull_request', prEvent('opened'), stubbed, {CHANGE_VALIDATION_REQUIRE_EXPECTED_HEAD: 'yes'});
+
+    assert.equal(exitCode, 1);
+    assert.equal(stubbed.calls.length, 0);
+  });
+});
+
+describe("send: 'false'", () => {
+  const COMMENT_ONLY = {CHANGE_VALIDATION_SEND: 'false', CHANGE_VALIDATION_COMMENT: 'true'};
+
+  it('sends no stage request on a pull_request, and names the pull request for the comment', async () => {
+    const stubbed = stub();
+    const {exitCode, outputs, lines} = await runWith('pull_request', prEvent('synchronize', {pull_request: pullRequest()}), stubbed, COMMENT_ONLY);
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(outputs, {outcome: 'comment_only', 'session-id': '', created: '', agent: '', 'description-source': '', 'pull-request-number': '7'});
+    assert.equal(stubbed.calls.length, 0);
+    assert.ok(lines.some((line) => line.startsWith('::notice') && line.includes("no stage request sent (send: 'false')")));
+  });
+
+  it('skips an edit that did not move the base, as a stage request would', async () => {
+    const stubbed = stub();
+    const {exitCode, outputs} = await runWith('pull_request', prEvent('edited', {pull_request: pullRequest(), changes: {title: {from: 'a'}}}), stubbed, COMMENT_ONLY);
+
+    assert.equal(exitCode, 0);
+    assert.equal(outputs.outcome, 'skipped');
+    assert.equal(stubbed.calls.length, 0);
+  });
+
+  it('is not gated by require-expected-head, which it ignores', async () => {
+    const stubbed = stub();
+    const {exitCode, outputs} = await runWith('pull_request', prEvent('synchronize', {pull_request: pullRequest()}), stubbed, {
+      ...COMMENT_ONLY,
+      CHANGE_VALIDATION_REQUIRE_EXPECTED_HEAD: 'true',
+      CHANGE_VALIDATION_EXPECTED_HEAD_SHA: '',
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(outputs.outcome, 'comment_only');
+    assert.equal(stubbed.calls.length, 0);
+  });
+
+  it('takes a trusted commenter with write access on issue_comment, reading only the pull request and the permission', async () => {
+    const stubbed = stub();
+    const {exitCode, outputs} = await runWith('issue_comment', commentEvent('MEMBER'), stubbed, COMMENT_ONLY);
+
+    assert.equal(exitCode, 0);
+    assert.equal(outputs.outcome, 'comment_only');
+    assert.equal(outputs['pull-request-number'], '7');
+    assert.deepEqual(stubbed.calls.map((call) => call.url.pathname), ['/repos/Org/Repo/pulls/7', '/repos/Org/Repo/collaborators/dev/permission']);
+  });
+
+  it("refuses a fork's pull request on issue_comment, before checking the commenter", async () => {
+    const stubbed = stub({pr: pullRequest({head: {sha: HEAD, ref: 'f', repo: {id: 2002}}})});
+    const {exitCode, outputs} = await runWith('issue_comment', commentEvent('MEMBER'), stubbed, COMMENT_ONLY);
+
+    assert.equal(exitCode, 0);
+    assert.equal(outputs.outcome, 'refused');
+    assert.deepEqual(stubbed.calls.map((call) => call.url.pathname), ['/repos/Org/Repo/pulls/7']);
+  });
+
+  it('refuses a commenter without write access, or outside the repository, and a fork', async () => {
+    const readOnly = await runWith('issue_comment', commentEvent('MEMBER'), stub({permission: json(200, {permission: 'read'})}), COMMENT_ONLY);
+    assert.equal(readOnly.outputs.outcome, 'refused');
+    assert.equal(readOnly.exitCode, 0);
+
+    const outsider = stub();
+    const contributed = await runWith('issue_comment', commentEvent('CONTRIBUTOR'), outsider, COMMENT_ONLY);
+    assert.equal(contributed.outputs.outcome, 'refused');
+    assert.equal(outsider.calls.length, 0);
+
+    const fork = pullRequest({head: {sha: HEAD, ref: 'f', repo: {id: 2002}}});
+    const forked = await runWith('pull_request', prEvent('synchronize', {pull_request: fork}), stub(), {...COMMENT_ONLY, ...NO_KEY});
+    assert.equal(forked.outputs.outcome, 'refused');
+    assert.equal(forked.exitCode, 0);
+  });
+
+  it('skips a comment without the trigger word, a closed pull request and an issue', async () => {
+    for (const [eventName, payload, env] of [
+      ['issue_comment', commentEvent('MEMBER'), {CHANGE_VALIDATION_TRIGGER_WORD: '/other'}],
+      ['pull_request', closedEvent(), {}],
+      ['pull_request', prEvent('labeled', {pull_request: pullRequest()}), {}],
+      ['issue_comment', commentEvent('MEMBER', {issue: {number: 7}}), {}],
+      ['issue_comment', commentEvent('MEMBER', {action: 'edited'}), {}],
+    ]) {
+      const stubbed = stub();
+      const {exitCode, outputs} = await runWith(eventName, payload, stubbed, {...COMMENT_ONLY, ...env});
+      assert.equal(exitCode, 0, eventName);
+      assert.equal(outputs.outcome, 'skipped', JSON.stringify(env));
+      assert.equal(stubbed.calls.length, 0);
+    }
+  });
+
+  for (const [label, eventName, payload, env, message] of [
+    ['without comment', 'pull_request', prEvent('synchronize'), {CHANGE_VALIDATION_COMMENT: 'false'}, /needs comment: 'true'/],
+    ['with await', 'pull_request', prEvent('synchronize'), {CHANGE_VALIDATION_AWAIT: 'true'}, /nothing to await/],
+    ['on merge_group', 'merge_group', {action: 'checks_requested'}, {}, /runs on pull_request and issue_comment events, not merge_group/],
+    ['on a deployed commit', 'push', {}, {}, /not push/],
+    ['without a key', 'pull_request', prEvent('synchronize', {pull_request: pullRequest()}), NO_KEY, /mabl-api-key is required/],
+    ['without a workspace', 'pull_request', prEvent('synchronize', {pull_request: pullRequest()}), {MABL_WORKSPACE_ID: ' '}, /workspace-id is required/],
+    ['with another api', 'pull_request', prEvent('synchronize'), {MABL_API_URL: 'https://evil.example.test'}, /api-url has to be/],
+  ]) {
+    it(`fails, calling nothing, ${label}`, async () => {
+      const stubbed = stub();
+      const {exitCode, outputs, lines} = await runWith(eventName, payload, stubbed, {...COMMENT_ONLY, ...env});
+
+      assert.equal(exitCode, 1);
+      assert.equal(outputs.outcome, 'failed');
+      assert.equal(stubbed.calls.length, 0);
+      assert.match(lines.join('\n'), message);
+    });
+  }
+
+  it("fails on a value other than 'true' or 'false', and sends on 'true' or empty", async () => {
+    const odd = stub();
+    const failed = await runWith('pull_request', prEvent('opened'), odd, {CHANGE_VALIDATION_SEND: 'no'});
+    assert.equal(failed.exitCode, 1);
+    assert.equal(odd.calls.length, 0);
+
+    for (const send of ['true', '', ' true ']) {
+      const stubbed = stub();
+      const {outputs} = await runWith('pull_request', prEvent('opened'), stubbed, {CHANGE_VALIDATION_SEND: send});
+      assert.equal(outputs.outcome, 'accepted', JSON.stringify(send));
+      assert.equal(stubbed.mablCalls().length, 1);
+    }
+  });
+});
