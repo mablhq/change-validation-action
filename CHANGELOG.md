@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.2
 
 - `expected-head-sha`: on a pull request's stage request or the trigger word alone, send only if the pull
   request's head is still the commit the caller checked; otherwise nothing is sent and `outcome` is `skipped`.
@@ -21,6 +21,9 @@
   call's merge half done. The step fails and says to re-run the job. A 429 and `agent_stopping` are still retried.
 - With `comment: true`, a merged pull request mabl took updates the comment, then reads and posts once more
   20 seconds later. The comment mabl renders now also names the mabl branch each stage's tests run on.
+- Docs: a policy `target` takes `api_url`, the address API tests run against, with `{sha7}` like `url`. Use it
+  when API tests should reach a preview deployment per commit instead of the environment's own API URL.
+- Docs: the README's "Learn more" links point at the change validation help articles.
 
 ## 1.0.1
 
