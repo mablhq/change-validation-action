@@ -4,6 +4,8 @@ export const TITLE = 'mabl change validation';
 export const MAX_ANNOTATION_CHARS = 500;
 export const COMMIT_SHA = /^[0-9a-f]{40}$/;
 export const MINUTE_MS = 60_000;
+// Events mabl took as its own, as opposed to ones it ignored or replaced.
+export const TAKEN = new Set(['accepted', 'duplicate']);
 
 export const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 

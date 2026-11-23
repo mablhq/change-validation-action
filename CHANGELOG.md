@@ -11,16 +11,14 @@
   mabl's report, on `pull_request` and `issue_comment`, for up to `comment-wait-minutes`. `outcome` is
   `comment_only`. It reads the report again just before each write, and writes nothing that poll when that read
   fails or names another session. Every existing input combination behaves as before.
-- On a merged pull request, the action logs what became of its mabl branch: `merged`, `nothing_to_merge`,
-  `not_open` and `left` as notices, an outcome it doesn't know as a warning, and `diverged` and `failed` as errors,
-  naming the branch and, for `diverged`, the tests and flows master moved past. The outcome comes from `landed` in
-  mabl's answer to the merged event.
-- **Merged pull request steps can now fail.** A step that tells mabl a pull request merged now fails when its
-  mabl branch diverged or the merge failed. The pull request has already merged, so this blocks nothing; it tells
-  someone to finish the merge by hand in mabl. A re-run reports the recorded outcome again and says so.
+- On a merged pull request, the action logs what became of its mabl branch, from `landed` in mabl's answer to the
+  merged event: `merged`, `nothing_to_merge`, `not_open` and `left` as notices, and an outcome it doesn't know, or
+  no outcome at all, as a warning. **The step now fails on `diverged` and `failed`**, naming the branch and, for
+  `diverged`, the tests and flows master moved past. The pull request has already merged, so this blocks nothing;
+  it tells someone to finish the merge by hand in mabl. A re-run reports the recorded outcome again and says so.
 - The merged event waits up to 5 minutes for mabl's answer, since mabl merges the branch inside that call, and is
-  no longer sent again after no answer or a gateway's error, which could find the first call's merge half done.
-  The step fails and says to re-run the job. mabl's own 429 and 5xx answers are still retried.
+  no longer sent again after no answer or any error but a 429 or `agent_stopping`, which could find the first
+  call's merge half done. The step fails and says to re-run the job. A 429 and `agent_stopping` are still retried.
 - With `comment: true`, a merged pull request mabl took updates the comment, then reads and posts once more
   20 seconds later. The comment mabl renders now also names the mabl branch each stage's tests run on.
 

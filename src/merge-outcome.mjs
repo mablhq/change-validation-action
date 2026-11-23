@@ -1,5 +1,6 @@
 // What became of a merged pull request's mabl branch, from `landed` in mabl's answer to the merged event.
-// diverged and failed leave a merge for someone to finish by hand, so they fail the step; the rest are notices.
+// diverged and failed leave a merge for someone to finish by hand, so they fail the step; other known outcomes are
+// notices and unknown ones warnings.
 
 import {oneLine} from './lib/mabl-api.mjs';
 import {isObject} from './lib/shared.mjs';
@@ -41,7 +42,7 @@ function branchMessage(name, outcome, entities, recorded) {
     case 'nothing_to_merge':
       return `mabl branch ${name}: nothing to merge into master`;
     case 'not_open':
-      return `mabl branch ${name}: not merged, it doesn't exist, is already merged or isn't a working branch`;
+      return `mabl branch ${name}: nothing to merge, it doesn't exist, is already merged or isn't a working branch`;
     case 'left':
       return `mabl branch ${name}: left open, the policy doesn't set merge_mabl_branches`;
     case 'diverged':
@@ -60,21 +61,22 @@ function levelOf(outcome) {
   return KNOWN_OUTCOMES.has(outcome) ? 'notice' : 'warning';
 }
 
-// What to report for `landed`: one annotation per branch, an error for an outcome someone has to act on, and a
-// log line per test or flow a diverged branch names. `failed` says whether any outcome fails the step.
+// What to report for `landed`: one annotation per branch (a single warning if `landed` is missing or malformed), an
+// error for an outcome someone has to act on, and a log line per test or flow a diverged branch names.
+// `failed` says whether any outcome fails the step.
 // `recorded` is a repeat's answer, which reports the outcome recorded the first time.
 export function mergeOutcome(landed, {recorded = false} = {}) {
-  if (!isObject(landed)) {
-    return {annotations: [], log: ["mabl's answer doesn't say what became of the pull request's mabl branch"], failed: false};
+  if (!isObject(landed) || !Array.isArray(landed.branches)) {
+    return {annotations: [{level: 'warning', message: "mabl's answer doesn't say what became of the pull request's mabl branch, so check it in mabl"}], log: [], failed: false};
   }
-  const branches = (Array.isArray(landed.branches) ? landed.branches : []).filter(isObject);
+  const branches = landed.branches.filter(isObject);
   if (branches.length === 0) {
     return {annotations: [{level: 'notice', message: "no mabl branch to merge: the pull request's tests didn't run on one"}], log: [], failed: false};
   }
   const annotations = [];
   const log = [];
   for (const branch of branches) {
-    const fullName = oneLine(branch.name) || 'unnamed';
+    const fullName = shorten(oneLine(branch.name) || 'unnamed', MAX_LOGGED_NAME);
     const outcome = oneLine(branch.outcome);
     const entities = outcome === 'diverged' && Array.isArray(branch.diverged_entities) ? branch.diverged_entities.filter(isObject) : [];
     annotations.push({level: levelOf(outcome), message: branchMessage(shorten(fullName, MAX_BRANCH_NAME), outcome, entities, recorded)});

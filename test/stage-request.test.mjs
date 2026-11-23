@@ -465,7 +465,7 @@ describe('a merged pull request', () => {
   for (const [outcome, message] of [
     ['merged', 'mabl branch feature-x: merged into master'],
     ['nothing_to_merge', 'mabl branch feature-x: nothing to merge into master'],
-    ['not_open', "mabl branch feature-x: not merged, it doesn't exist, is already merged or isn't a working branch"],
+    ['not_open', "mabl branch feature-x: nothing to merge, it doesn't exist, is already merged or isn't a working branch"],
     ['left', "mabl branch feature-x: left open, the policy doesn't set merge_mabl_branches"],
   ]) {
     it(`logs a ${outcome} mabl branch as a notice and passes`, async () => {
@@ -555,6 +555,8 @@ describe('a merged pull request', () => {
     assert.ok(lines.includes(`mabl branch b${'r'.repeat(199)}: master moved past test "${long(0)}" (t0-j)`));
     const huge = await runWith('pull_request', closedEvent(), stub({mabl: [mergedAnswer('accepted', landedWith({name: 'b', outcome: 'diverged', diverged_entities: [{id: 'x-j', type: 'test', name: 'h'.repeat(5000)}]}))]}));
     assert.ok(huge.lines.includes(`mabl branch b: master moved past test "${'h'.repeat(499)}\u2026" (x-j)`));
+    const hugeBranch = await runWith('pull_request', closedEvent(), stub({mabl: [mergedAnswer('accepted', landedWith({name: 'b'.repeat(5000), outcome: 'diverged', diverged_entities: [{id: 'x-j', type: 'test', name: 'T'}]}))]}));
+    assert.ok(hugeBranch.lines.includes(`mabl branch ${'b'.repeat(499)}\u2026: master moved past test "T" (x-j)`));
   });
 
   it('logs at most 200 of a diverged branch\'s tests and flows, then counts the rest', async () => {
@@ -580,14 +582,18 @@ describe('a merged pull request', () => {
     }
   });
 
-  it('passes with a notice when no stage ran on a mabl branch, and with a log line when mabl names no outcome', async () => {
+  it('passes with a notice when no stage ran on a mabl branch, and with a warning when mabl names no outcome', async () => {
     const none = await runWith('pull_request', closedEvent(), stub({mabl: [mergedAnswer('accepted', landedWith())]}));
     assert.equal(none.exitCode, 0);
     assert.deepEqual(annotations(none.lines, 'notice').slice(1), ["no mabl branch to merge: the pull request's tests didn't run on one"]);
 
     const older = await runWith('pull_request', closedEvent(), stub({mabl: [mergedAnswer('accepted')]}));
     assert.equal(older.exitCode, 0);
-    assert.ok(older.lines.includes("mabl's answer doesn't say what became of the pull request's mabl branch"));
+    assert.deepEqual(annotations(older.lines, 'warning'), ["mabl's answer doesn't say what became of the pull request's mabl branch, so check it in mabl"]);
+
+    const malformed = await runWith('pull_request', closedEvent(), stub({mabl: [mergedAnswer('accepted', {merge_commit_sha: 'f'.repeat(40), branches: 'x'})]}));
+    assert.equal(malformed.exitCode, 0);
+    assert.deepEqual(annotations(malformed.lines, 'warning'), ["mabl's answer doesn't say what became of the pull request's mabl branch, so check it in mabl"]);
   });
 
   it("reports nothing about a branch for a superseded merge, which is another merge commit's", async () => {
@@ -620,19 +626,27 @@ describe('a merged pull request', () => {
   });
 
   it('never resends a merged event that got no answer or a gateway error, which may still be merging, and says to re-run', async () => {
-    for (const answers of [[], [{status: 504, body: '<html>gateway timeout</html>'}]]) {
+    for (const [answers, outcome] of [
+      [[], 'failed'],
+      [[{status: 504, body: '<html>gateway timeout</html>'}], 'failed'],
+      [[json(504, {message: 'Gateway Timeout'})], 'failed'],
+      [[json(502, {error: {code: 502}})], 'failed'],
+      [[json(500, {code: 500, message: 'boom'})], 'failed'],
+      [[json(500, {code: 500, error_code: 'internal', message: 'boom'})], 'internal'],
+      [[json(503, {})], 'failed'],
+    ]) {
       const stubbed = stub({mabl: answers});
       const {exitCode, outputs, lines, delays} = await runWith('pull_request', closedEvent(), stubbed);
 
-      assert.equal(stubbed.mablCalls().length, 1);
+      assert.equal(stubbed.mablCalls().length, 1, JSON.stringify(answers));
       assert.deepEqual(delays, []);
       assert.equal(exitCode, 1);
-      assert.equal(outputs.outcome, 'failed');
+      assert.equal(outputs.outcome, outcome);
       assert.match(annotations(lines, 'error')[0], /mabl may still be merging the mabl branch, so re-run this job in a few minutes to read what it recorded$/);
     }
   });
 
-  it("retries a merged event mabl itself answered with a 5xx or 429, which it finished handling", async () => {
+  it("retries a merged event mabl answered with agent_stopping or a 429, which it finished handling", async () => {
     const stubbed = stub({
       mabl: [
         json(503, {code: 503, error_code: 'agent_stopping', message: 'retry'}),

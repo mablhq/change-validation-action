@@ -6,7 +6,7 @@ import {readFileSync} from 'node:fs';
 
 import {escapeInvisible} from './lib/policy-read.mjs';
 import {apiUrlOf, basicAuthorization} from './lib/mabl-api.mjs';
-import {MAX_ANNOTATION_CHARS, MINUTE_MS, TITLE, isObject, redactor, repositoryIdOf} from './lib/shared.mjs';
+import {MAX_ANNOTATION_CHARS, MINUTE_MS, TAKEN, TITLE, isObject, redactor, repositoryIdOf} from './lib/shared.mjs';
 import {annotation, shorten} from './lib/workflow-commands.mjs';
 
 export const REPORT_PATH = '/changeValidation/report';
@@ -20,7 +20,6 @@ const DEFAULT_WAIT_MINUTES = 15;
 const REQUEST_TIMEOUT_MS = 30_000;
 const COMMENTS_PER_PAGE = 100;
 const MAX_COMMENT_PAGES = 30;
-const TAKEN = new Set(['accepted', 'duplicate']);
 
 const firstLine = (text) => String(text).split(/\r?\n/, 1)[0];
 const sameBody = (a, b) => String(a).replace(/\r\n/g, '\n').trimEnd() === String(b).replace(/\r\n/g, '\n').trimEnd();

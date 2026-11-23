@@ -11,7 +11,7 @@ import {POLICY_FILE, escapeInvisible, readPolicyAt} from './lib/policy-read.mjs'
 import {awaitStage, endWithErrorStatus} from './await-status.mjs';
 import {commentCommand} from './command.mjs';
 import {mergeOutcome} from './merge-outcome.mjs';
-import {COMMIT_SHA, MAX_ANNOTATION_CHARS, TITLE, redactor, repositoryIdOf} from './lib/shared.mjs';
+import {COMMIT_SHA, MAX_ANNOTATION_CHARS, TAKEN, TITLE, redactor, repositoryIdOf} from './lib/shared.mjs';
 import {annotation, shorten} from './lib/workflow-commands.mjs';
 import {REVISION_EVENTS, revisionHead} from './revision.mjs';
 
@@ -28,7 +28,7 @@ const WRITE_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
 export const RETRY_DELAYS_MS = [2_000, 5_000, 15_000];
 // Answers that end the run without failing it.
 const QUIET_ERRORS = new Set(['feature_disabled', 'change_agent_closed', 'no_change_agent']);
-const TAKEN = new Set(['accepted', 'duplicate']);
+const MERGED_EVENT_KIND = 'pull_request.merged';
 const REQUEST_TIMEOUT_MS = 60_000;
 // mabl merges the pull request's mabl branch inside the merged event's call, which can take a while.
 export const MERGED_TIMEOUT_MS = 300_000;
@@ -637,7 +637,7 @@ async function buildMergedRequest({payload, env, fetchImpl}) {
     warnings: [],
     body: {
       reference: {type: 'pull_request', id: `${repositoryId}#${pr.number}`, url: pr.html_url},
-      event: {kind: 'pull_request.merged', head_sha: merge, head_ref: pr.head.ref, occurred_at: occurredAt},
+      event: {kind: MERGED_EVENT_KIND, head_sha: merge, head_ref: pr.head.ref, occurred_at: occurredAt},
       related_artifacts: [{artifact_type: 'inline', name: 'validation_policy', artifact_data: {type: 'json', value}}],
     },
   };
@@ -977,10 +977,10 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
 
 // agent_stopping comes as a 503.
 export const isRetryable = ({status}) => status === 0 || status === 429 || status >= 500;
-// A merged event that got no answer, or a gateway's answer, may still be merging the mabl branch, and a
-// second call made meanwhile could record the half-done merge as diverged. Only mabl's own answer is
-// retried.
-export const isRetryableMerged = ({status, body}) => status === 429 || (status >= 500 && body !== null && typeof body === 'object');
+// A merged event that got no answer, or any answer but mabl saying it stopped before merging, may still be
+// merging the mabl branch, and a second call made meanwhile could record the half-done merge as diverged. A
+// gateway's JSON error looks like mabl's own, so only a 429 and agent_stopping are retried.
+export const isRetryableMerged = ({status, errorCode}) => status === 429 || (status >= 500 && errorCode === 'agent_stopping');
 
 // The same body each attempt. The api dedupes a repeat it has finished with, so a retry is safe
 // once an earlier attempt's call has ended; `retryable` says which answers mean it has. With a
@@ -1272,7 +1272,7 @@ async function sendStage({env, fetchImpl, sleep, now = Date.now, print, signalAf
     body.event.occurred_at = now();
   }
   const budget = await onSending(body);
-  const merged = body.event.kind === 'pull_request.merged';
+  const merged = body.event.kind === MERGED_EVENT_KIND;
   const answer = await send({
     apiUrl,
     apiKey,
@@ -1290,15 +1290,15 @@ async function sendStage({env, fetchImpl, sleep, now = Date.now, print, signalAf
   }
   if (answer.status >= 200 && answer.status < 300) {
     const result = answer.body ?? {};
-    const what = {command: 'command', 'pull_request.merged': 'merged'}[body.event.kind] ?? `stage ${body.event.stage}`;
+    const what = {command: 'command', [MERGED_EVENT_KIND]: 'merged'}[body.event.kind] ?? `stage ${body.event.stage}`;
     report('notice', `${what}: ${result.event}${result.agent ? `, agent ${result.agent}` : ''} (${result.session_id})`);
     let exitCode = 0;
     // A superseded merged event is another merge commit's, so its branch isn't this one's to report.
     if (merged && TAKEN.has(result.event)) {
-      const landed = mergeOutcome(result.landed, {recorded: result.event === 'duplicate'});
-      landed.annotations.forEach(({level, message}) => report(level, message));
-      landed.log.forEach((line) => print(redact(escapeInvisible(line))));
-      exitCode = landed.failed ? 1 : 0;
+      const branchReport = mergeOutcome(result.landed, {recorded: result.event === 'duplicate'});
+      branchReport.annotations.forEach(({level, message}) => report(level, message));
+      branchReport.log.forEach((line) => print(redact(escapeInvisible(line))));
+      exitCode = branchReport.failed ? 1 : 0;
     }
     return finish(String(result.event ?? ''), exitCode, {
       ...described,
@@ -1314,7 +1314,7 @@ async function sendStage({env, fetchImpl, sleep, now = Date.now, print, signalAf
     return finish(answer.errorCode, 0, described);
   }
   // Not retried, so whoever reads the log needs to know a re-run is how to learn the outcome.
-  const inFlight = merged && (answer.status === 0 || (answer.status >= 500 && !isRetryableMerged(answer)));
+  const inFlight = merged && (answer.status === 0 || answer.status >= 500) && !isRetryableMerged(answer);
   report('error', inFlight ? `${what}; mabl may still be merging the mabl branch, so re-run this job in a few minutes to read what it recorded` : what);
   return finish(answer.errorCode || 'failed', 1, described);
 }

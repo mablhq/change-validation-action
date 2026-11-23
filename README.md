@@ -229,9 +229,9 @@ job again doesn't merge again: mabl answers `duplicate` with the outcome it reco
 way even after someone merged the branch by hand, and the error says it's the recorded outcome.
 
 mabl merges the branch while it answers the merged event, so the action waits up to 5 minutes for that answer
-and doesn't send the event again when it gets none, or gets a gateway's error: mabl may still be merging, and a
-second event sent meanwhile could find the merge half done. The step fails and says to re-run the job a few
-minutes later, which reads the outcome mabl recorded. An answer from mabl itself, such as a 429, is retried as
+and doesn't send the event again when it gets none, or any answer but a 429 or `agent_stopping`: mabl may still
+be merging, and a second event sent meanwhile could find the merge half done. The step fails and says to re-run
+the job a few minutes later, which reads the outcome mabl recorded. A 429 or `agent_stopping` is retried as
 usual.
 
 With `comment: true`, the pull request's comment shows the same outcome, and before the merge it names the mabl
