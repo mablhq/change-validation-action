@@ -36,7 +36,7 @@ inputs:
     required: false
     default: ''
   expected-head-sha:
-    description: "On pull_request and issue_comment, the pull request head the caller checked, such as the commit its preview was built from. If the pull request's head is another commit when the request would be sent, nothing is sent and outcome is skipped. Empty turns the check off; an issue_comment event carries no head, so look it up yourself. Ignored on merge_group, deployed commits, a merged pull request, a command and with send 'false', but always has to be a 40-character commit sha when set"
+    description: "On pull_request and issue_comment, the pull request head your workflow checked, such as the commit its preview was built from. If the head is another commit when the request would be sent, nothing is sent and outcome is skipped. Empty turns the check off. Must be a 40-character commit sha when set. Ignored on merge_group, deployed commits, a merged pull request, a command and with send 'false'"
     required: false
     default: ''
   require-expected-head:

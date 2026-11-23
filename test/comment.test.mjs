@@ -486,15 +486,33 @@ describe("the comment with send 'false'", () => {
     assert.equal(stubbed.store[0].body, bodyOf('final', 's1-as'));
   });
 
-  it('writes the first report when the second read fails or names another session', async () => {
-    for (const second of [json(500, {}), {throws: 'socket hang up'}, json(200, reportOf({analysed: [true], text: 'other', session: 's2-as'}))]) {
-      const stubbed = stub({reports: [json(200, reportOf({analysed: [true], text: 'first'})), second]});
+  it('writes nothing, and reads again later, when the second read fails or names another session', async () => {
+    for (const second of [json(500, {}), {throws: 'socket hang up'}, json(200, {}), json(200, reportOf({analysed: [true], text: 'other', session: 's2-as'}))]) {
+      const stubbed = stub({
+        reports: [json(200, reportOf({analysed: [true], text: 'stale'})), second, json(200, reportOf({analysed: [true], text: 'newer'}))],
+        comments: [{id: 'IC_1', body: bodyOf('newer', 's1-as'), author: OURS}],
+      });
       const lines = await step(stubbed, COMMENT_ONLY);
 
-      assert.equal(stubbed.creates().length, 1, JSON.stringify(second));
-      assert.equal(stubbed.store[0].body, bodyOf('first', 's1-as'));
+      assert.equal(stubbed.updates().length, 0, JSON.stringify(second));
+      assert.equal(stubbed.creates().length, 0, JSON.stringify(second));
+      assert.equal(stubbed.store[0].body, bodyOf('newer', 's1-as'));
+      assert.ok(lines.some((line) => line.includes('not posted this time')), JSON.stringify(second));
       assert.deepEqual(warnings(lines), []);
     }
+  });
+
+  it('starts over with the new report when the session changed between reads', async () => {
+    const s2 = json(200, reportOf({analysed: [true], text: 'second', session: 's2-as'}));
+    const stubbed = stub({
+      reports: [json(200, reportOf({analysed: [true], text: 'old'})), s2],
+      comments: [{id: 'IC_1', body: bodyOf('older', 's1-as'), author: OURS}],
+    });
+    await step(stubbed, COMMENT_ONLY);
+
+    assert.equal(stubbed.store[0].body, bodyOf('older', 's1-as'));
+    assert.equal(stubbed.creates().length, 1);
+    assert.equal(stubbed.store[1].body, bodyOf('second', 's2-as'));
   });
 
   it('creates the comment when the pull request has none yet', async () => {
@@ -520,7 +538,7 @@ describe("the comment with send 'false'", () => {
     assert.equal(warnings(lines).length, 1);
   });
 
-  it('reads nothing when the run did not name a pull request to refresh, or on another event', async () => {
+  it('reads nothing when the run did not name a pull request to keep current, or on another event', async () => {
     for (const env of [
       {...COMMENT_ONLY, CHANGE_VALIDATION_OUTCOME: 'refused'},
       {...COMMENT_ONLY, CHANGE_VALIDATION_OUTCOME: 'failed'},

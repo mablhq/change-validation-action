@@ -1657,6 +1657,28 @@ describe("send: 'false'", () => {
     assert.ok(lines.some((line) => line.startsWith('::notice') && line.includes("no stage request sent (send: 'false')")));
   });
 
+  it('skips an edit that did not move the base, as a stage request would', async () => {
+    const stubbed = stub();
+    const {exitCode, outputs} = await runWith('pull_request', prEvent('edited', {pull_request: pullRequest(), changes: {title: {from: 'a'}}}), stubbed, COMMENT_ONLY);
+
+    assert.equal(exitCode, 0);
+    assert.equal(outputs.outcome, 'skipped');
+    assert.equal(stubbed.calls.length, 0);
+  });
+
+  it('is not gated by require-expected-head, which it ignores', async () => {
+    const stubbed = stub();
+    const {exitCode, outputs} = await runWith('pull_request', prEvent('synchronize', {pull_request: pullRequest()}), stubbed, {
+      ...COMMENT_ONLY,
+      CHANGE_VALIDATION_REQUIRE_EXPECTED_HEAD: 'true',
+      CHANGE_VALIDATION_EXPECTED_HEAD_SHA: '',
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(outputs.outcome, 'comment_only');
+    assert.equal(stubbed.calls.length, 0);
+  });
+
   it('takes a trusted commenter with write access on issue_comment, reading only the pull request and the permission', async () => {
     const stubbed = stub();
     const {exitCode, outputs} = await runWith('issue_comment', commentEvent('MEMBER'), stubbed, COMMENT_ONLY);

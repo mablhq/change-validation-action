@@ -9,8 +9,8 @@
   the run on any event.
 - `send: false`, with `comment: true`: send no stage request and keep the pull request's comment current from
   mabl's report, on `pull_request` and `issue_comment`, for up to `comment-wait-minutes`. `outcome` is
-  `comment_only`. It reads the report again just before each write. Every existing input combination behaves as
-  before.
+  `comment_only`. It reads the report again just before each write, and writes nothing that poll when that read
+  fails or names another session. Every existing input combination behaves as before.
 
 ## 1.0.1
 

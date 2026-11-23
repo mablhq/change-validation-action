@@ -137,9 +137,10 @@ or the action refuses it. `base-sha` is the commit the environment ran before, w
 
 Outputs: `outcome`, `session-id`, `created`, `agent`, `description-source` (`built` or `provided`), and with
 `await`, `status` (`success`, `failure` or `error`). When the request was sent, `outcome` is `accepted`,
-`duplicate` or `superseded`, and with `send: false` it is `comment_only`. Otherwise it says why not: `skipped`, `entry_gone` (a merge queue build the queue dropped),
-`refused`, `feature_disabled`, `change_agent_closed` (validation was turned off for the pull request), another
-error code from mabl, `failed`, or with `await`, `timed_out`.
+`duplicate` or `superseded`, and with `send: false` it is `comment_only`. Otherwise it says why not: `skipped`,
+`entry_gone` (a merge queue build the queue dropped), `refused`, `feature_disabled`, `change_agent_closed`
+(validation was turned off for the pull request), another error code from mabl, `failed`, or with `await`,
+`timed_out`.
 
 If change validation is off for the workspace, mabl answers `feature_disabled`: the step passes with a notice and
 nothing is validated. With `await`, the commit status is `failure`, so a gate can't pass on a stage nobody judged.
@@ -182,12 +183,13 @@ request is sent for) and `issue_comment` events, and makes the checks a request 
 forks, and on a comment the trigger word and a commenter with write access.
 
 Without a request of its own, it reads the report again just before each write, so it doesn't put back an older
-report than a run that sent a request has just written. A run that sends and a run with `send: false` for the
+report than a run that sent a request has just written. If that read fails or names another session, it writes
+nothing and tries again on the next poll. A run that sends and a run with `send: false` for the
 same pull request can still overlap for that one read, so give both a concurrency group per pull request where
 you can.
 
 Use it when your workflow decides not to send, but the comment should still catch up. For example, a workflow
-that sends only a pull request's first commit can still refresh the comment on later pushes, so the comment
+that sends only a pull request's first commit can still keep the comment current on later pushes, so it
 doesn't stop updating when a push cancelled an earlier run's wait. When mabl has no agent for the pull request
 yet, it posts nothing and logs why.
 

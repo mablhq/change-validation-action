@@ -1057,7 +1057,7 @@ export async function run({
     if (env.CHANGE_VALIDATION_AWAIT === 'true') {
       return inputError("send: 'false' sends no stage request, so there is nothing to await");
     }
-    return commentOnly({env, fetchImpl, print});
+    return planCommentOnlyRun({env, fetchImpl, print});
   }
   if (env.CHANGE_VALIDATION_AWAIT === 'true') {
     const invokedAt = now();
@@ -1083,12 +1083,13 @@ export async function run({
 
 // send: 'false' sends nothing: it names the pull request whose comment comment.mjs then keeps current,
 // with the checks a stage request from the same event would make first.
-async function commentOnly({env, fetchImpl, print}) {
+// Mirrors the event checks in buildRequest; keep the two in step.
+async function planCommentOnlyRun({env, fetchImpl, print}) {
   const redact = redactor(env);
-  const report = (level, message) => print(annotation(level, shorten(escapeInvisible(redact(message)), MAX_ANNOTATION_CHARS), {title: TITLE}));
+  const annotate = (level, message) => print(annotation(level, shorten(escapeInvisible(redact(message)), MAX_ANNOTATION_CHARS), {title: TITLE}));
   const finish = (outcome, exitCode, number = '') => ({exitCode, outputs: {...NO_OUTPUTS, outcome, 'pull-request-number': number}});
   const fail = (message) => {
-    report('error', `not sent: ${message}`);
+    annotate('error', `not sent: ${message}`);
     return finish('failed', 1);
   };
   if (String(env.CHANGE_VALIDATION_COMMENT ?? '').trim().toLowerCase() !== 'true') {
@@ -1108,7 +1109,11 @@ async function commentOnly({env, fetchImpl, print}) {
   try {
     if (eventName === 'pull_request') {
       if (!PULL_REQUEST_ACTIONS.has(payload.action)) {
-        report('notice', `not sent: pull_request ${payload.action} is not taken`);
+        annotate('notice', `not sent: pull_request ${payload.action} is not taken`);
+        return finish('skipped', 0);
+      }
+      if (payload.action === 'edited' && !payload.changes?.base) {
+        annotate('notice', 'not sent: the edit did not change the base branch');
         return finish('skipped', 0);
       }
       if (isFork(payload.pull_request)) {
@@ -1117,15 +1122,15 @@ async function commentOnly({env, fetchImpl, print}) {
       number = payload.pull_request?.number;
     } else if (eventName === 'issue_comment') {
       if (!payload.issue?.pull_request) {
-        report('notice', 'not sent: the comment is not on a pull request');
+        annotate('notice', 'not sent: the comment is not on a pull request');
         return finish('skipped', 0);
       }
       if (payload.action !== 'created') {
-        report('notice', `not sent: issue_comment ${payload.action} is not taken`);
+        annotate('notice', `not sent: issue_comment ${payload.action} is not taken`);
         return finish('skipped', 0);
       }
       if (commentCommand({env, payload}) === null) {
-        report('notice', 'not sent: the comment does not start with the trigger word');
+        annotate('notice', 'not sent: the comment does not start with the trigger word');
         return finish('skipped', 0);
       }
       const association = payload.comment?.author_association;
@@ -1149,7 +1154,7 @@ async function commentOnly({env, fetchImpl, print}) {
     }
   } catch (error) {
     if (error instanceof Refusal) {
-      report('notice', `not sent: ${error.message}`);
+      annotate('notice', `not sent: ${error.message}`);
       return finish('refused', 0);
     }
     return fail(error?.message ?? error);
@@ -1163,7 +1168,7 @@ async function commentOnly({env, fetchImpl, print}) {
   if (!String(env.MABL_WORKSPACE_ID ?? '').trim()) {
     return fail('workspace-id is required: the id of the mabl workspace to validate in');
   }
-  report('notice', `pull request #${number}: no stage request sent (send: 'false'); keeping its comment current`);
+  annotate('notice', `pull request #${number}: no stage request sent (send: 'false'); keeping its comment current`);
   return finish('comment_only', 0, String(number));
 }
 
