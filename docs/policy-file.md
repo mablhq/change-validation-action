@@ -242,8 +242,7 @@ its tests ran on.
 
 Use `match-pr` on the stages that gate a change too. A change that needs its tests updated can only pass when the
 gate runs the updated tests, and those live on the branch until the pull request merges. A stage on the branch also
-runs the tests the branch created or edited, as
-[Tests on the pull request's mabl branch](#tests-on-the-pull-requests-mabl-branch) describes.
+runs the tests the branch created or edited, as [Tests on the pull request's mabl branch](#tests-on-the-pull-requests-mabl-branch) describes.
 
 > **The pull request's description names the branch.** The next stage request, such as the merge queue entry, runs
 > the branch the description names at that moment, and with `merge_mabl_branches` that branch merges into master.
