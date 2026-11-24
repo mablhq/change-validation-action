@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.4
 
 - With `await` on a merge queue entry, when mabl answers that a newer request replaced the commit being waited on
   and the queue no longer has that commit, the action publishes no conclusion on it, leaves the pull request's
