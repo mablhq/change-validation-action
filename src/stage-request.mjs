@@ -1,6 +1,6 @@
-// Asks mabl to validate a policy stage at a head, or sends a pull request's mabl agent a trusted
-// commenter's command: one POST /changeValidation/events per run, a stage request carrying the
-// policy file. The README has the inputs and outputs.
+// Asks mabl to validate a policy stage at a head, with a trusted commenter's request when a comment
+// carries one: one POST /changeValidation/events per run, a stage request carrying the policy file.
+// The README has the inputs and outputs.
 
 import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
@@ -34,8 +34,9 @@ const REQUEST_TIMEOUT_MS = 60_000;
 export const MERGED_TIMEOUT_MS = 300_000;
 const GITHUB_TIMEOUT_MS = 30_000;
 const RESOLVE_TIMEOUT_MS = 30_000;
-// The events route's cap, in UTF-16 units.
+// The events route's caps, in UTF-16 units.
 const MAX_DESCRIPTION_CHARS = 20_000;
+const MAX_COMMAND_CHARS = 2_000;
 const MAX_PATHS_PER_APPLICATION = 30;
 const FILES_PER_PAGE = 100;
 // GitHub lists at most 3,000 of a pull request's files.
@@ -710,7 +711,6 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
     return buildRevisionRequest({eventName, payload, env, fetchImpl});
   }
   let number;
-  let kind;
   let fromComment = false;
   let command = '';
   let queued;
@@ -743,8 +743,6 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
     }
     number = payload.issue.number;
     fromComment = true;
-    // The trigger word alone sends the PR's current head, which starts its agent if it has none.
-    kind = command === '' ? undefined : 'command';
   } else if (eventName === 'merge_group') {
     if (payload.action !== 'checks_requested') {
       return {skip: `merge_group ${payload.action} is not sent`};
@@ -756,21 +754,19 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
       `runs on pull_request, issue_comment and merge_group events, or for a revision on ${[...REVISION_EVENTS].join(', ')}; not ${eventName || 'none'}`,
     );
   }
+  const kind = 'stage.requested';
   const stage = String(env.CHANGE_VALIDATION_STAGE ?? '').trim();
-  if (kind !== 'command') {
-    kind = 'stage.requested';
-    if (!STAGE_NAME.test(stage)) {
-      throw new Error(
-        stage === ''
-          ? 'stage is required: the policy stage to validate, such as pull_request'
-          : `stage ${JSON.stringify(stage)} is not a policy stage name: a letter or digit, then letters, digits, - and _, up to 64 characters`,
-      );
-    }
+  if (!STAGE_NAME.test(stage)) {
+    throw new Error(
+      stage === ''
+        ? 'stage is required: the policy stage to validate, such as pull_request'
+        : `stage ${JSON.stringify(stage)} is not a policy stage name: a letter or digit, then letters, digits, - and _, up to 64 characters`,
+    );
   }
   if (!Number.isInteger(number) || number < 1) {
     throw new Error('the event names no pull request');
   }
-  const expectedHeadApplies = !queued && kind !== 'command';
+  const expectedHeadApplies = !queued;
   const expectedHead = expectedHeadApplies ? String(env.CHANGE_VALIDATION_EXPECTED_HEAD_SHA ?? '').trim().toLowerCase() : '';
   if (expectedHeadApplies && !expectedHead && String(env.CHANGE_VALIDATION_REQUIRE_EXPECTED_HEAD ?? '').trim() === 'true') {
     throw new Error('require-expected-head is true, but expected-head-sha is empty');
@@ -795,17 +791,17 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
       throw new Refusal(`comments are taken only from someone with write access to ${repository}; ${login ?? 'the commenter'} has none`);
     }
   }
-  if (kind === 'command') {
-    if (!env.GITHUB_RUN_ID || !env.GITHUB_RUN_ATTEMPT) {
-      throw new Error('GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT are required for a command');
+  // A comment's request is timed at the comment's creation, so a retried delivery is the same request.
+  let commented = null;
+  if (command !== '') {
+    if (command.length > MAX_COMMAND_CHARS) {
+      throw new Error(`the request after the trigger word is ${command.length} characters, over the ${MAX_COMMAND_CHARS} mabl takes`);
     }
-    return {
-      body: {
-        ...base,
-        event: {kind, command},
-        idempotency_key: `${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}`,
-      },
-    };
+    const commentedAt = Date.parse(payload.comment?.created_at);
+    if (!Number.isFinite(commentedAt)) {
+      throw new Error('the comment has no created_at');
+    }
+    commented = {occurredAt: commentedAt};
   }
 
   const headSha = queued ? queued.head_sha : pr.head.sha;
@@ -906,7 +902,7 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
     warnings.push(`sent without mabl_branch: the description names one over ${MAX_MABL_BRANCH_CHARS} characters`);
     mablBranch = null;
   }
-  const occurredAt = Date.parse(queued ? queued.head_commit?.timestamp : pr.updated_at);
+  const occurredAt = commented ? commented.occurredAt : Date.parse(queued ? queued.head_commit?.timestamp : pr.updated_at);
   if (!Number.isFinite(occurredAt)) {
     throw new Error(queued ? 'the merge group has no head commit timestamp' : `pull request #${number} has no updated_at`);
   }
@@ -967,6 +963,7 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
         ...(paths ?? {}),
         ...(pullRequestHead ? {pull_request_head_sha: pullRequestHead} : {}),
         ...(mablBranch ? {mabl_branch: mablBranch} : {}),
+        ...(commented ? {command} : {}),
       },
       related_artifacts: [{artifact_type: 'inline', name: 'validation_policy', artifact_data: {type: 'json', value}}],
       // Explicit either way: mabl stores it per stage request, and absent would follow the agent's.
@@ -1291,7 +1288,7 @@ async function sendStage({env, fetchImpl, sleep, now = Date.now, print, signalAf
   }
   if (answer.status >= 200 && answer.status < 300) {
     const result = answer.body ?? {};
-    const what = {command: 'command', [MERGED_EVENT_KIND]: 'merged'}[body.event.kind] ?? `stage ${body.event.stage}`;
+    const what = body.event.kind === MERGED_EVENT_KIND ? 'merged' : `stage ${body.event.stage}${body.event.command ? " with the comment's request" : ''}`;
     report('notice', `${what}: ${result.event}${result.agent ? `, agent ${result.agent}` : ''} (${result.session_id})`);
     let exitCode = 0;
     // A superseded merged event is another merge commit's, so its branch isn't this one's to report.

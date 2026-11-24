@@ -63,7 +63,11 @@ const mergeGroup = {
 };
 const prEvent = {action: 'synchronize', pull_request: {number: 7, head: {sha: HEAD}}};
 // The trigger word alone would be a stage request at the PR's head.
-const triggerComment = {action: 'created', issue: {number: 7, pull_request: {}}, comment: {author_association: 'MEMBER', user: {login: 'dev'}}};
+const triggerComment = {
+  action: 'created',
+  issue: {number: 7, pull_request: {}},
+  comment: {id: 4242, created_at: '2026-11-04T12:05:00Z', author_association: 'MEMBER', user: {login: 'dev'}},
+};
 
 const check = (overrides = {}) => ({
   id: 'merge_queue/web/impacted',
@@ -857,7 +861,7 @@ describe('await inputs', () => {
     }
   });
 
-  it('sends a command without waiting', async () => {
+  it("sends a comment's request without waiting", async () => {
     const stubbed = stub({clockStart: 0, events: [json(201, {session_id: 's1-as', event: 'accepted'})]});
     const {exitCode, outputs} = await awaitWith('issue_comment', triggerComment, stubbed, {CHANGE_VALIDATION_COMMAND: 'author 2'});
 
@@ -867,7 +871,7 @@ describe('await inputs', () => {
     assert.deepEqual(stubbed.published(), []);
   });
 
-  it('sends a command without needing the await inputs', async () => {
+  it("sends a comment's request without needing the await inputs", async () => {
     for (const env of [{STATUS_CONTEXT: ''}, {DEADLINE_MINUTES: '0'}]) {
       const stubbed = stub({clockStart: 0, events: [json(201, {session_id: 's1-as', event: 'accepted'})]});
       const {exitCode, outputs} = await awaitWith('issue_comment', triggerComment, stubbed, {CHANGE_VALIDATION_COMMAND: 'author 2', ...env});
@@ -875,7 +879,9 @@ describe('await inputs', () => {
       assert.equal(exitCode, 0);
       assert.equal(outputs.outcome, 'accepted');
       assert.equal(stubbed.events().length, 1);
-      assert.deepEqual(JSON.parse(stubbed.events()[0].body).event, {kind: 'command', command: 'author 2'});
+      const {event} = JSON.parse(stubbed.events()[0].body);
+      assert.equal(event.kind, 'stage.requested');
+      assert.equal(event.command, 'author 2');
       assert.deepEqual(stubbed.published(), []);
     }
   });
@@ -946,16 +952,19 @@ describe('await inputs', () => {
     assert.equal(outputs.outcome, 'skipped');
     assert.equal(outputs.status, '');
     assert.equal(stubbed.calls.length, 0);
-    assert.ok(!lines.some((line) => line.includes('the command is sent without waiting')));
+    assert.ok(!lines.some((line) => line.includes('sent without waiting')));
   });
 
-  it('reads the command after the trigger word, and sends it without waiting', async () => {
+  it("reads the request after the trigger word, and sends it without waiting", async () => {
     const stubbed = stub({clockStart: 0, events: [json(201, {session_id: 's1-as', event: 'accepted'})]});
     const comment = {...triggerComment, comment: {...triggerComment.comment, body: '/mabl author 2'}};
-    const {exitCode} = await awaitWith('issue_comment', comment, stubbed, {CHANGE_VALIDATION_TRIGGER_WORD: '/mabl'});
+    const {exitCode, lines} = await awaitWith('issue_comment', comment, stubbed, {CHANGE_VALIDATION_TRIGGER_WORD: '/mabl'});
 
     assert.equal(exitCode, 0);
-    assert.deepEqual(JSON.parse(stubbed.events()[0].body).event, {kind: 'command', command: 'author 2'});
+    const {event} = JSON.parse(stubbed.events()[0].body);
+    assert.equal(event.kind, 'stage.requested');
+    assert.equal(event.command, 'author 2');
+    assert.ok(lines.some((line) => line.startsWith('::notice') && line.includes("await doesn't apply to a comment's request")));
     assert.deepEqual(stubbed.published(), []);
   });
 

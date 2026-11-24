@@ -12,7 +12,7 @@ inputs:
     description: "The id of the mabl workspace to validate in"
     required: true
   stage:
-    description: "The policy stage to validate, by the name your policy gives it (for example pull_request on pull_request events, merge_queue on merge_group, and a scope revision stage such as staging after a deploy); required unless sending a command"
+    description: "The policy stage to validate, by the name your policy gives it (for example pull_request on pull_request events, merge_queue on merge_group, and a scope revision stage such as staging after a deploy); required"
     required: false
     default: ''
   api-url:
@@ -20,11 +20,11 @@ inputs:
     required: false
     default: 'https://api.mabl.com'
   trigger-word:
-    description: "On issue_comment, the word a comment must start with, such as /mabl. The word alone sends the pull request's current head for stage, and the rest of the comment's first line is sent to its mabl agent as a command; any other comment is skipped. The commenter must have write access, and the command runs with the rights of the key that started the pull request's agent. When empty, every comment is taken, with command as its text"
+    description: "On issue_comment, the word a comment must start with, such as /mabl. The word sends a stage request for the pull request's current head, and the rest of the comment's first line, when there is any, goes with it to the pull request's mabl agent as a request in the commenter's own words (up to 2,000 characters); any other comment is skipped. The commenter must have write access, and the agent acts with the rights of the key that started it. When empty, every comment is taken, with command as its text"
     required: false
     default: ''
   command:
-    description: "On issue_comment without trigger-word, the comment's text after your own trigger word; ignored on pull_request and when trigger-word is set"
+    description: "On issue_comment without trigger-word, the comment's text after your own trigger word, sent with the stage request for the pull request's current head; ignored on pull_request and when trigger-word is set"
     required: false
     default: ''
   change-description:
@@ -36,7 +36,7 @@ inputs:
     required: false
     default: ''
   expected-head-sha:
-    description: "On pull_request and issue_comment, the pull request head your workflow checked, such as the commit its preview was built from. If the head is another commit when the request would be sent, nothing is sent and outcome is skipped. Empty turns the check off. Must be a 40-character commit sha when set. Ignored on merge_group, deployed commits, a merged pull request, a command and with send 'false'"
+    description: "On pull_request and issue_comment, the pull request head your workflow checked, such as the commit its preview was built from. If the head is another commit when the request would be sent, nothing is sent and outcome is skipped. Empty turns the check off. Must be a 40-character commit sha when set. Ignored on merge_group, deployed commits, a merged pull request and with send 'false'"
     required: false
     default: ''
   require-expected-head:
@@ -97,7 +97,7 @@ outputs:
   agent:
     description: 'working or queued; empty when nothing was woken'
   description-source:
-    description: "built when the action wrote the change description, provided when it sent change-description; empty for a command and when the run stopped before sending"
+    description: "built when the action wrote the change description, provided when it sent change-description; empty when the run stopped before sending"
   status:
     description: "With await, the state published as status-context: success or failure, or error when the run stopped on an input it can't use or an unexpected error; empty when nothing was published or without await"
 runs:

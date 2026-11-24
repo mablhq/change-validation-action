@@ -201,12 +201,12 @@ export async function awaitStage({env, fetchImpl, sleep, now, signalAfter, invok
     print(annotation(level, shorten(escapeInvisible(redact(message)), MAX_ANNOTATION_CHARS), {title: TITLE}));
   const eventName = env.GITHUB_EVENT_NAME;
   const {payload, context, target, github, runUrl} = statusTarget(env);
-  // Neither a command nor a comment that isn't for mabl is awaited, so they need none of the await inputs.
+  // Neither a comment's request nor a comment that isn't for mabl is awaited, so they need none of the await inputs.
   const command = eventName === 'issue_comment' ? commentCommand({env, payload}) : '';
   const notForMabl = command === null;
   if (command !== '') {
     if (!notForMabl) {
-      report('notice', 'await applies to stage requests; the command is sent without waiting');
+      report('notice', "await doesn't apply to a comment's request, which is sent without waiting");
     }
     const {exitCode, outputs} = await sendStage({env, fetchImpl, sleep, now, print});
     return {exitCode, outputs: {...outputs, status: ''}};

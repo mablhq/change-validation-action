@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A comment with text after the trigger word now sends something different.** It sends one `stage.requested`
+  event for the pull request's current head, the same request the trigger word alone sends, with the text in
+  `event.command`, timed at the comment's creation. The action no
+  longer sends `event.kind: command`. As a stage request it now needs `stage`, as the reusable workflow already
+  passes, follows `expected-head-sha` and `require-expected-head`, and is up to 2,000 characters. A re-run of
+  the job sends the same time, so mabl takes the comment once. The trigger word alone is unchanged.
 - With `await` on a merge queue entry, when mabl answers that a newer request replaced the commit being waited on
   and the queue no longer has that commit, the action publishes no conclusion on it, leaves the pull request's
   comment alone and passes, with `outcome` `entry_gone`, as when the queue drops an entry before sending.

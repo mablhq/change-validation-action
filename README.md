@@ -17,7 +17,7 @@ block.
 To analyze a change, the action sends mabl your policy file; the repository, branch and commits; the pull
 request's title, description (the first 8,000 characters, unless you pass your own `change-description`) and
 labels; the names of the changed files, grouped by application; and the diff totals. For a deployed commit it sends
-the titles of the pull requests merged since the base commit, and a comment command is sent as typed. It never
+the titles of the pull requests merged since the base commit, and a request typed in a comment is sent as typed. It never
 sends the contents of the files your change touches. Don't put secrets in a pull request's description.
 
 ## Before you start
@@ -128,7 +128,7 @@ or the action refuses it. `base-sha` is the commit the environment ran before, w
 | `require-expected-head` | `false` | `true` fails, sending nothing, when `expected-head-sha` is empty where it applies |
 | `head-sha`, `base-sha` | the event's | For a deployed commit: the commit, and the one the environment ran before |
 | `trigger-word` | | On `issue_comment`, the word a comment must start with, such as `/mabl`. See [Comment commands](#comment-commands) |
-| `command` | | On `issue_comment` without `trigger-word`, the text after your own trigger word, sent to the pull request's mabl agent |
+| `command` | | On `issue_comment` without `trigger-word`, the text after your own trigger word, sent with the stage request to the pull request's mabl agent |
 | `comment` | `false` | `true` keeps one comment on the pull request with mabl's report. See [The pull request comment](#the-pull-request-comment) |
 | `comment-wait-minutes` | `15` | With `comment`, how long after a pull request stage request to keep the comment current |
 | `send` | `true` | `false` sends no stage request and only keeps the comment current; needs `comment: true`. See [Keeping the comment current without a request](#keeping-the-comment-current-without-a-request) |
@@ -252,9 +252,21 @@ on:
     types: [created]
 ```
 
-- A comment that is exactly `/mabl` sends the pull request's current head again. Anything after the word, on the
-  comment's first line, goes to the pull request's mabl agent as is. The workflow's `trigger-word` input changes
-  the word.
+- A comment that is exactly `/mabl` sends the pull request's current head again. The workflow's `trigger-word`
+  input changes the word.
+- To ask for something, write `/mabl` and then your request in your own words, on the comment's first line, up to
+  2,000 characters. For example:
+
+  ```
+  /mabl re-run this
+  ```
+
+  ```
+  /mabl run it again, focusing on the checkout page
+  ```
+
+  The request goes, as typed, to the pull request's mabl agent with a fresh stage request for the current head.
+  There is no fixed syntax to learn.
 - Any other comment is skipped. GitHub still lists a skipped run for every comment on an issue or pull request,
   which is why the trigger isn't in the quickstart.
 - Comments are taken only from owners, members and collaborators who have write access.
@@ -282,9 +294,9 @@ would send a commit your check never saw. Pass the commit you checked as `expect
 
 When the pull request's head is another commit as the request would go out, including after the action reads
 the pull request again because it moved while its files were listed, nothing is sent and `outcome` is `skipped`,
-with a notice. The push's own run sends the new head. It applies to a pull request's stage request and to the
-trigger word alone; a comment command, a merged pull request, a merge queue entry, a deployed commit and
-`send: false` ignore it. A value that isn't a full commit sha fails the run on any event.
+with a notice. The push's own run sends the new head. It applies to a pull request's stage request and to a
+comment's, with or without a request typed after the trigger word; a merged pull request, a merge queue entry, a
+deployed commit and `send: false` ignore it. A value that isn't a full commit sha fails the run on any event.
 
 An empty value turns the check off, and some expressions are empty on some events:
 `github.event.pull_request.head.sha` is empty on `issue_comment`, so a comment workflow has to look the head up
