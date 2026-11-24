@@ -754,7 +754,6 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
       `runs on pull_request, issue_comment and merge_group events, or for a revision on ${[...REVISION_EVENTS].join(', ')}; not ${eventName || 'none'}`,
     );
   }
-  const kind = 'stage.requested';
   const stage = String(env.CHANGE_VALIDATION_STAGE ?? '').trim();
   if (!STAGE_NAME.test(stage)) {
     throw new Error(
@@ -792,16 +791,15 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
     }
   }
   // A comment's request is timed at the comment's creation, so a retried delivery is the same request.
-  let commented = null;
+  let commentedAt = null;
   if (command !== '') {
     if (command.length > MAX_COMMAND_CHARS) {
       throw new Error(`the request after the trigger word is ${command.length} characters, over the ${MAX_COMMAND_CHARS} mabl takes`);
     }
-    const commentedAt = Date.parse(payload.comment?.created_at);
+    commentedAt = Date.parse(payload.comment?.created_at);
     if (!Number.isFinite(commentedAt)) {
       throw new Error('the comment has no created_at');
     }
-    commented = {occurredAt: commentedAt};
   }
 
   const headSha = queued ? queued.head_sha : pr.head.sha;
@@ -902,7 +900,7 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
     warnings.push(`sent without mabl_branch: the description names one over ${MAX_MABL_BRANCH_CHARS} characters`);
     mablBranch = null;
   }
-  const occurredAt = commented ? commented.occurredAt : Date.parse(queued ? queued.head_commit?.timestamp : pr.updated_at);
+  const occurredAt = commentedAt ?? Date.parse(queued ? queued.head_commit?.timestamp : pr.updated_at);
   if (!Number.isFinite(occurredAt)) {
     throw new Error(queued ? 'the merge group has no head commit timestamp' : `pull request #${number} has no updated_at`);
   }
@@ -953,7 +951,7 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
     body: {
       ...base,
       event: {
-        kind,
+        kind: 'stage.requested',
         stage,
         head_sha: headSha,
         base_sha: baseSha,
@@ -963,7 +961,7 @@ export async function buildRequest({eventName, payload, env, fetchImpl, now = Da
         ...(paths ?? {}),
         ...(pullRequestHead ? {pull_request_head_sha: pullRequestHead} : {}),
         ...(mablBranch ? {mabl_branch: mablBranch} : {}),
-        ...(commented ? {command} : {}),
+        ...(command !== '' ? {command} : {}),
       },
       related_artifacts: [{artifact_type: 'inline', name: 'validation_policy', artifact_data: {type: 'json', value}}],
       // Explicit either way: mabl stores it per stage request, and absent would follow the agent's.

@@ -66,7 +66,7 @@ const prEvent = {action: 'synchronize', pull_request: {number: 7, head: {sha: HE
 const triggerComment = {
   action: 'created',
   issue: {number: 7, pull_request: {}},
-  comment: {id: 4242, created_at: '2026-11-04T12:05:00Z', author_association: 'MEMBER', user: {login: 'dev'}},
+  comment: {created_at: '2026-11-04T12:05:00Z', author_association: 'MEMBER', user: {login: 'dev'}},
 };
 
 const check = (overrides = {}) => ({
@@ -955,7 +955,7 @@ describe('await inputs', () => {
     assert.ok(!lines.some((line) => line.includes('sent without waiting')));
   });
 
-  it("reads the request after the trigger word, and sends it without waiting", async () => {
+  it('reads the request after the trigger word, and sends it without waiting', async () => {
     const stubbed = stub({clockStart: 0, events: [json(201, {session_id: 's1-as', event: 'accepted'})]});
     const comment = {...triggerComment, comment: {...triggerComment.comment, body: '/mabl author 2'}};
     const {exitCode, lines} = await awaitWith('issue_comment', comment, stubbed, {CHANGE_VALIDATION_TRIGGER_WORD: '/mabl'});

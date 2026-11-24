@@ -2,7 +2,7 @@ name: mabl change validation (pull request)
 
 # Asks mabl to validate a pull request stage when a pull request opens or gets a new commit, and when someone
 # with write access comments the trigger word on it: the word sends the current head, and anything after it goes
-# with that request to the pull request's mabl agent, as a request in the commenter's own words.
+# with that request to the pull request's mabl agent.
 #
 # With `comment: true` it also keeps one comment on the pull request with mabl's report of the change, for up to
 # comment-wait-minutes after the stage request.

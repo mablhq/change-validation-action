@@ -87,9 +87,10 @@ comment on the pull request. Send it as one stage request for the pull request's
   description, changed paths, labels and policy file. A check of the head before sending, such as the action's
   `expected-head-sha`, applies the same way.
 - `event.command` is the person's text, up to 2,000 characters. mabl parses none of it and passes it to the agent.
-- `event.occurred_at` is when the comment was created, in milliseconds since the Unix epoch. It identifies the
-  request: a retried delivery of the same comment sends the same time and reaches the agent once, and two
-  requests for a stage with the same time, head and base are one request.
+- `event.occurred_at` is when the comment was created, in milliseconds since the Unix epoch. A retried delivery
+  of the same comment sends the same time and, while the head and base are unchanged, reaches the agent once.
+  Two requests for a stage with the same time, head and base are one request, so two comments created in the
+  same second on one head are too. A request older than the stage's newest one is `superseded`.
 - A comment with nothing to ask, only your trigger word, is a plain stage request: leave out `event.command`.
 - Take requests only from people with write access to the repository. The agent acts as the API key that started
   it, not as the commenter.

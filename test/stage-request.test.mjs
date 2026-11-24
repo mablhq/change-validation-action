@@ -72,12 +72,11 @@ const prEvent = (action, extra = {}) => ({
   ...extra,
 });
 
-const COMMENT_ID = 4242;
 const COMMENTED_AT = '2026-11-04T12:05:00Z';
 const commentEvent = (association, extra = {}) => ({
   action: 'created',
   issue: {number: 7, pull_request: {url: 'x'}},
-  comment: {id: COMMENT_ID, created_at: COMMENTED_AT, author_association: association, body: '/mabl author 2', user: {login: 'dev'}},
+  comment: {created_at: COMMENTED_AT, author_association: association, body: '/mabl author 2', user: {login: 'dev'}},
   ...extra,
 });
 
@@ -900,7 +899,7 @@ describe('a fork', () => {
 });
 
 describe("a comment's request", () => {
-  it("asks for the caller's stage at the current head with the commenter's text, keyed by the comment and timed at it", async () => {
+  it("asks for the caller's stage at the current head with the commenter's text, timed at the comment", async () => {
     const stubbed = stub({mabl: [json(200, {session_id: 's1-as', created: false, event: 'accepted', agent: 'working'})]});
     const {exitCode, outputs, lines} = await runWith('issue_comment', commentEvent('COLLABORATOR'), stubbed, {
       CHANGE_VALIDATION_COMMAND: ' run it again, focusing on the checkout page ',

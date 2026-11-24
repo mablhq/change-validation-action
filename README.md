@@ -17,8 +17,9 @@ block.
 To analyze a change, the action sends mabl your policy file; the repository, branch and commits; the pull
 request's title, description (the first 8,000 characters, unless you pass your own `change-description`) and
 labels; the names of the changed files, grouped by application; and the diff totals. For a deployed commit it sends
-the titles of the pull requests merged since the base commit, and a request typed in a comment is sent as typed. It never
-sends the contents of the files your change touches. Don't put secrets in a pull request's description.
+the titles of the pull requests merged since the base commit, and a request typed in a comment is sent as typed
+to the pull request's mabl agent. It never sends the contents of the files your change touches. Don't put secrets
+in a pull request's description or in a comment's request.
 
 ## Before you start
 
@@ -266,7 +267,9 @@ on:
   ```
 
   The request goes, as typed, to the pull request's mabl agent with a fresh stage request for the current head.
-  There is no fixed syntax to learn.
+  There is no fixed syntax to learn. The action reports that mabl took the request, not what the agent did with
+  it. `duplicate` means mabl already had a request for that head at that moment, so the text wasn't applied
+  again, and a request over 2,000 characters fails the step and sends nothing.
 - Any other comment is skipped. GitHub still lists a skipped run for every comment on an issue or pull request,
   which is why the trigger isn't in the quickstart.
 - Comments are taken only from owners, members and collaborators who have write access.

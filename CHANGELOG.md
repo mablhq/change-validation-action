@@ -2,12 +2,13 @@
 
 ## 1.1.0
 
-- **A comment with text after the trigger word now sends something different.** It sends one `stage.requested`
-  event for the pull request's current head, the same request the trigger word alone sends, with the text in
-  `event.command`, timed at the comment's creation. The action no
-  longer sends `event.kind: command`. As a stage request it now needs `stage`, as the reusable workflow already
-  passes, follows `expected-head-sha` and `require-expected-head`, and is up to 2,000 characters. A re-run of
-  the job sends the same time, so mabl takes the comment once. The trigger word alone is unchanged.
+- **A comment with text after the trigger word is now a stage request.** The action sends one `stage.requested`
+  event for the pull request's current head, as the trigger word alone does, with the text in `event.command`,
+  instead of a separate `event.kind: command` event. Like any stage request it needs `stage` (the reusable
+  workflow already passes it) and follows `expected-head-sha` and `require-expected-head`. The text is up to 2,000
+  characters; a longer one fails the step and sends nothing. The event is timed at the comment's creation, so a
+  re-run of the job while the head is unchanged sends the same request and mabl takes it once; after a push, a
+  re-run asks again for the new head. The trigger word alone is unchanged.
 
 ## 1.0.4
 
