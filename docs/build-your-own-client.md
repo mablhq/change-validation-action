@@ -158,7 +158,8 @@ The answer to an `accepted` or `duplicate` merged event has a `landed` field wit
 happened to the branch, and so does the status from then on. Each entry of `landed.branches` has the branch's
 `name` and `outcome`, and a `diverged` one lists `diverged_entities`, the tests and flows master moved past.
 `diverged` and `failed` need a person to finish the merge in mabl, so make them visible: this action fails its
-step on them. An older api may answer without `landed`; this action warns and passes then, and a client of your
+step on them and posts a new pull request comment that mentions the author and whoever merged it, since a failed
+step on a closed pull request and an edited comment both go unseen. An older api may answer without `landed`; this action warns and passes then, and a client of your
 own can read the status.
 
 ## Ordering and retries

@@ -116,16 +116,11 @@ async function readReport({apiUrl, apiKey, request, fetchImpl}) {
 const describeAnswer = ({status, body, error}) =>
   `${status ? `HTTP ${status}` : 'no answer'}${typeof body?.error_code === 'string' ? ` ${body.error_code}` : ''}${(error ?? body?.message) ? `: ${error ?? body.message}` : ''}`;
 
-// Creates or updates the oldest comment this token wrote on the pull request whose first line is the
-// marker and whose data line names `report`'s session. With `reread`, the report is read again just
-// before the write, and the newer one is written when it names the same session; if that read fails
-// or names another session, it throws and writes nothing. Returns what it did and the report the
-// comment now shows.
-async function upsertComment({env, number, report, fetchImpl, reread}) {
+// GitHub's GraphQL API with the step's token. A token that can't write answers 200 with a FORBIDDEN error.
+function githubGraphql({env, fetchImpl}) {
   const githubApiUrl = (env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, '');
   const graphqlUrl = env.GITHUB_GRAPHQL_URL || `${githubApiUrl}/graphql`;
-  const [owner, name] = String(env.GITHUB_REPOSITORY ?? '').split('/');
-  const graphql = async (query, variables) => {
+  return async (query, variables) => {
     let response;
     try {
       response = await fetchImpl(graphqlUrl, {
@@ -141,19 +136,24 @@ async function upsertComment({env, number, report, fetchImpl, reread}) {
       throw new CommentFailure(`HTTP ${response.status}`, {forbidden: response.status === 401 || response.status === 403});
     }
     const answer = await response.json().catch(() => null);
-    // A token that can't write answers 200 with a FORBIDDEN error.
     const [error] = Array.isArray(answer?.errors) ? answer.errors : [];
     if (error) {
       throw new CommentFailure(`${error?.type ?? 'error'}: ${error?.message ?? ''}`, {forbidden: error?.type === 'FORBIDDEN'});
     }
     return answer?.data ?? {};
   };
+}
 
-  const session = dataSession(report.markdown);
+// GraphQL names a bot author without the [bot] its viewer login has.
+const authoredBy = (viewer) => (author) =>
+  isObject(author) && typeof author.login === 'string' && (author.login === viewer || (author.__typename === 'Bot' && `${author.login}[bot]` === viewer));
+
+// Pages through the pull request's comments until `matches` finds this token's own comment. Returns the pull
+// request's node id and that comment, or null.
+async function findOwnComment({graphql, owner, name, number, matches}) {
   let after = null;
   let subject = null;
-  let oldest = null;
-  for (let page = 0; page < MAX_COMMENT_PAGES && !oldest; page += 1) {
+  for (let page = 0; page < MAX_COMMENT_PAGES; page += 1) {
     const data = await graphql(FIND_QUERY, {owner, name, number, after});
     const viewer = data?.viewer?.login;
     const pull = data?.repository?.pullRequest;
@@ -161,18 +161,36 @@ async function upsertComment({env, number, report, fetchImpl, reread}) {
       throw new CommentFailure(`GitHub named no ${pull ? 'login for the token' : `pull request #${number}`}`);
     }
     subject = pull.id;
-    // GraphQL names a bot author without the [bot] its viewer login has.
-    const own = (author) =>
-      isObject(author) && typeof author.login === 'string' && (author.login === viewer || (author.__typename === 'Bot' && `${author.login}[bot]` === viewer));
+    const own = authoredBy(viewer);
     const nodes = Array.isArray(pull.comments?.nodes) ? pull.comments.nodes : [];
-    oldest = nodes.find(
-      (node) => isObject(node) && own(node.author) && typeof node.body === 'string' && firstLine(node.body) === MARKER && dataSession(node.body) === session,
-    );
+    const found = nodes.find((node) => isObject(node) && own(node.author) && typeof node.body === 'string' && matches(node.body));
+    if (found) {
+      return {subject, comment: found};
+    }
     if (pull.comments?.pageInfo?.hasNextPage !== true || nodes.length < COMMENTS_PER_PAGE) {
       break;
     }
     after = pull.comments.pageInfo.endCursor;
   }
+  return {subject, comment: null};
+}
+
+// Creates or updates the oldest comment this token wrote on the pull request whose first line is the
+// marker and whose data line names `report`'s session. With `reread`, the report is read again just
+// before the write, and the newer one is written when it names the same session; if that read fails
+// or names another session, it throws and writes nothing. Returns what it did and the report the
+// comment now shows.
+async function upsertComment({env, number, report, fetchImpl, reread}) {
+  const [owner, name] = String(env.GITHUB_REPOSITORY ?? '').split('/');
+  const graphql = githubGraphql({env, fetchImpl});
+  const session = dataSession(report.markdown);
+  const {subject, comment: oldest} = await findOwnComment({
+    graphql,
+    owner,
+    name,
+    number,
+    matches: (body) => firstLine(body) === MARKER && dataSession(body) === session,
+  });
   let latestReport = report;
   // Nothing is written when the comment already shows this report, so there is nothing to read again for.
   if (reread && !(oldest && sameBody(oldest.body, report.markdown))) {
@@ -199,6 +217,63 @@ async function upsertComment({env, number, report, fetchImpl, reread}) {
   return {effect: 'updated', latestReport};
 }
 
+// The first line of the notice posted when a merged pull request's mabl branch wasn't merged into master.
+export const UNMERGED_MARKER = '<!-- mabl-change-validation-unmerged -->';
+const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+
+// A name from mabl, safe inside a code span: one line, no backticks, so it can't mention anyone or add markdown.
+const codeSpan = (text) => `\`${String(text ?? '').replace(/[`\r\n]/g, "'") || 'unnamed'}\``;
+
+function unmergedLine(branch) {
+  const named = Array.isArray(branch.entities) ? branch.entities.map((entity) => `${/^[a-z_]+$/.test(entity.type) ? entity.type : 'entity'} ${codeSpan(entity.name)}`) : [];
+  const more = branch.more > 0 ? ` and ${branch.more} more` : '';
+  if (branch.outcome === 'failed') {
+    return `- ${codeSpan(branch.name)}: the merge into master failed, and the branch may be partly merged. Check it and finish the merge by hand in mabl.`;
+  }
+  const movedPast = named.length > 0 ? ` for ${named.join(', ')}${more}` : '';
+  return `- ${codeSpan(branch.name)}: master changed after the branch${movedPast}. Merge the branch into master by hand in mabl.`;
+}
+
+// The people to tell: the pull request's author and whoever merged it, without bots.
+function mentionsOf(payload) {
+  const people = [payload?.pull_request?.user, payload?.pull_request?.merged_by]
+    .filter((user) => isObject(user) && user.type !== 'Bot' && typeof user.login === 'string' && GITHUB_LOGIN.test(user.login))
+    .map((user) => user.login);
+  return [...new Set(people)].map((login) => `@${login}`);
+}
+
+export function unmergedNotice({branches, payload}) {
+  const mentions = mentionsOf(payload);
+  return [
+    UNMERGED_MARKER,
+    `${mentions.length > 0 ? `${mentions.join(' ')}: ` : ''}this pull request merged, but mabl couldn't merge its mabl branch into master, so master's tests don't have its test changes yet. Other pull requests' checks can fail on those tests until the branch is merged.`,
+    '',
+    ...branches.map(unmergedLine),
+  ].join('\n');
+}
+
+// A new comment, so that GitHub notifies the people it names, where an edit to the report comment notifies nobody.
+// Posted once per pull request: a re-run finds it and posts nothing.
+async function postUnmergedNotice({env, number, payload, branches, fetchImpl}) {
+  const [owner, name] = String(env.GITHUB_REPOSITORY ?? '').split('/');
+  const graphql = githubGraphql({env, fetchImpl});
+  const {subject, comment} = await findOwnComment({graphql, owner, name, number, matches: (body) => firstLine(body) === UNMERGED_MARKER});
+  if (comment) {
+    return 'already posted';
+  }
+  await graphql(CREATE_MUTATION, {subject, body: unmergedNotice({branches, payload})});
+  return 'posted';
+}
+
+function unmergedBranches(env) {
+  try {
+    const branches = JSON.parse(String(env.CHANGE_VALIDATION_UNMERGED ?? '') || '[]');
+    return Array.isArray(branches) ? branches.filter(isObject) : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function main({env = process.env, fetchImpl = fetch, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = Date.now, print = (line) => process.stdout.write(`${line}\n`)} = {}) {
   const redact = redactor(env);
   const log = (line) => print(redact(escapeInvisible(line)));
@@ -216,6 +291,14 @@ export async function main({env = process.env, fetchImpl = fetch, sleep = (ms) =
   }
   const number = Number(env.PULL_REQUEST_NUMBER);
   const commentLabel = `pull request #${number}'s comment`;
+  const unmerged = plan === 'merged' ? unmergedBranches(env) : [];
+  if (unmerged.length > 0) {
+    try {
+      log(`pull request #${number}'s unmerged branch notice: ${await postUnmergedNotice({env, number, payload, branches: unmerged, fetchImpl})}`);
+    } catch (error) {
+      warn(`pull request #${number}'s unmerged branch notice not posted: ${error.message}`);
+    }
+  }
   const apiKey = env.MABL_API_KEY ?? '';
   const workspaceId = String(env.MABL_WORKSPACE_ID ?? '').trim();
   if (!workspaceId) {

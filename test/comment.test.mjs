@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {describe, it} from 'node:test';
 
 import {STATUS_PATH} from '../src/await-status.mjs';
-import {MARKER, POLL_INTERVAL_MS, REPORT_PATH, main} from '../src/comment.mjs';
+import {MARKER, POLL_INTERVAL_MS, REPORT_PATH, UNMERGED_MARKER, main} from '../src/comment.mjs';
 import {DEFAULT_API_URL, basicAuthorization} from '../src/lib/mabl-api.mjs';
 import {EVENTS_PATH, RESOLVE_PATH, run} from '../src/stage-request.mjs';
 
@@ -370,6 +370,65 @@ describe('the comment on a merged pull request', () => {
       stubbed.store.map((comment) => comment.body),
       [bodyOf('mabl branch feature-x: merged')],
     );
+  });
+});
+
+describe("the notice when a merged pull request's mabl branch didn't merge", () => {
+  const MERGED = {action: 'closed', pull_request: {merged: true, user: {login: 'author-1', type: 'User'}, merged_by: {login: 'merger-2', type: 'User'}}};
+  const UNMERGED = JSON.stringify([
+    {name: 'claude/fix-1', outcome: 'diverged', entities: [{type: 'test', name: 'Checkout'}], more: 2},
+    {name: 'feature-z', outcome: 'failed', entities: [], more: 0},
+  ]);
+  const notices = (stubbed) => stubbed.store.filter((comment) => comment.body.startsWith(UNMERGED_MARKER));
+
+  it('posts a new comment naming the author, the merger, each branch and what master moved past, beside the report comment', async () => {
+    const stubbed = stub({reports: [json(200, reportOf({text: 'merged'}))], comments: [{id: 'IC_1', body: bodyOf('before the merge'), author: OURS}]});
+    const lines = await step(stubbed, {CHANGE_VALIDATION_UNMERGED: UNMERGED}, MERGED);
+
+    assert.equal(notices(stubbed).length, 1);
+    assert.equal(
+      notices(stubbed)[0].body,
+      [
+        UNMERGED_MARKER,
+        "@author-1 @merger-2: this pull request merged, but mabl couldn't merge its mabl branch into master, so master's tests don't have its test changes yet. Other pull requests' checks can fail on those tests until the branch is merged.",
+        '',
+        '- `claude/fix-1`: master changed after the branch for test `Checkout` and 2 more. Merge the branch into master by hand in mabl.',
+        '- `feature-z`: the merge into master failed, and the branch may be partly merged. Check it and finish the merge by hand in mabl.',
+      ].join('\n'),
+    );
+    assert.equal(stubbed.store[0].body, bodyOf('merged'));
+    assert.ok(lines.includes("pull request #7's unmerged branch notice: posted"));
+  });
+
+  it('posts it once: a re-run finds its own notice and posts nothing', async () => {
+    const stubbed = stub({comments: [{id: 'IC_9', body: `${UNMERGED_MARKER}\nearlier`, author: OURS}]});
+    const lines = await step(stubbed, {CHANGE_VALIDATION_UNMERGED: UNMERGED}, MERGED);
+
+    assert.equal(notices(stubbed).length, 1);
+    assert.ok(lines.includes("pull request #7's unmerged branch notice: already posted"));
+  });
+
+  it("names nobody who is a bot or the same person twice, and keeps mabl's names from mentioning anyone or adding markdown", async () => {
+    const stubbed = stub();
+    await step(
+      stubbed,
+      {CHANGE_VALIDATION_UNMERGED: JSON.stringify([{name: 'b`@team', outcome: 'diverged', entities: [{type: 'test**', name: '`@all` *x*'}], more: 0}])},
+      {action: 'closed', pull_request: {merged: true, user: {login: 'ops-bot', type: 'Bot'}, merged_by: {login: 'ops-bot', type: 'Bot'}}},
+    );
+
+    const [notice] = notices(stubbed);
+    assert.ok(notice.body.split('\n')[1].startsWith('this pull request merged'));
+    assert.ok(notice.body.includes("- `b'@team`: master changed after the branch for entity `'@all' *x*`."));
+  });
+
+  it('posts nothing when every branch merged, or the pull request was only opened', async () => {
+    const merged = stub();
+    await step(merged, {}, MERGED);
+    assert.equal(notices(merged).length, 0);
+
+    const opened = stub();
+    await step(opened, {CHANGE_VALIDATION_UNMERGED: UNMERGED}, {action: 'opened'});
+    assert.equal(notices(opened).length, 0);
   });
 });
 

@@ -507,6 +507,31 @@ describe('a merged pull request', () => {
     assert.ok(lines.includes('mabl branch feature-x: master moved past flow "Log in" (login-f)'));
   });
 
+  it("hands the comment step each branch that didn't merge, and none when every branch merged", async () => {
+    const diverged = await runWith(
+      'pull_request',
+      closedEvent(),
+      stub({
+        mabl: [
+          mergedAnswer('accepted', {
+            branches: [
+              {name: 'feature-x', outcome: 'diverged', diverged_entities: [{id: 'checkout-j', type: 'test', name: 'Checkout'}]},
+              {name: 'feature-y', outcome: 'merged'},
+              {name: 'feature-z', outcome: 'failed'},
+            ],
+          }),
+        ],
+      }),
+    );
+    assert.deepEqual(JSON.parse(diverged.outputs['unmerged-branches']), [
+      {name: 'feature-x', outcome: 'diverged', entities: [{type: 'test', name: 'Checkout'}], more: 0},
+      {name: 'feature-z', outcome: 'failed', entities: [], more: 0},
+    ]);
+
+    const merged = await runWith('pull_request', closedEvent(), stub({mabl: [mergedAnswer('accepted', landedWith({name: 'feature-x', outcome: 'merged'}))]}));
+    assert.equal(merged.outputs['unmerged-branches'], undefined);
+  });
+
   it('fails on a failed merge, and again on a repeat of the event, which says it reports the recorded outcome', async () => {
     const recorded = " (as recorded when the pull request merged; a re-run doesn't check the branch again)";
     for (const [event, note] of [

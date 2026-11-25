@@ -169,6 +169,10 @@ stage's checks are going. It posts the markdown mabl renders, as is.
 - **On a merged pull request** mabl took (`accepted` or `duplicate`), it updates the comment so it shows what
   became of the pull request's mabl branch, then reads and posts once more 20 seconds later, in case a merge queue
   run that read the report before the merge posted over it.
+  When the pull request's mabl branch didn't merge (`diverged` or `failed`), it also posts a separate comment, once,
+  that mentions the pull request's author and whoever merged it, names the branch, and says to merge it by hand in
+  mabl. An edit to the report comment notifies nobody, and until the branch is merged master's tests lack the
+  pull request's test changes, so other pull requests' checks can fail on them.
 - **Never on** deployed commits or a request mabl didn't take, and on a comment event only with `send: false`.
 
 The comment can't change the request's outcome, outputs or commit status: a failed report read or post is a log
@@ -218,8 +222,8 @@ mabl answers the merged event with what became of the pull request's mabl branch
 | `nothing_to_merge` | Open, with no edit to merge | Passes, with a notice |
 | `not_open` | It doesn't exist, is already merged, or isn't a working branch | Passes, with a notice |
 | `left` | The policy doesn't set `merge_mabl_branches`, so mabl left it open | Passes, with a notice |
-| `diverged` | master changed after the branch for a test or flow, so mabl left it open | **Fails**, naming the branch and those tests and flows |
-| `failed` | The merge failed, and the branch may be partly merged | **Fails**, naming the branch |
+| `diverged` | master changed after the branch for a test or flow, so mabl left it open | **Fails**, naming the branch and those tests and flows; with `comment`, posts a notice that mentions the author and merger |
+| `failed` | The merge failed, and the branch may be partly merged | **Fails**, naming the branch; with `comment`, posts the same notice |
 
 When no stage ran on a mabl branch there is nothing to merge, and the step passes with a notice saying so. An
 outcome this version of the action doesn't know passes with a warning.

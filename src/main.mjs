@@ -32,6 +32,7 @@ export async function action({
         CHANGE_VALIDATION_OUTCOME: String(outputs.outcome ?? ''),
         CHANGE_VALIDATION_STATUS: String(outputs.status ?? ''),
         PULL_REQUEST_NUMBER: String(outputs['pull-request-number'] ?? ''),
+        CHANGE_VALIDATION_UNMERGED: String(outputs['unmerged-branches'] ?? ''),
       },
       fetchImpl,
       sleep,

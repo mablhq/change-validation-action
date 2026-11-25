@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- With `comment`, when a merged pull request's mabl branch didn't merge into master (`diverged` or `failed`), the
+  action posts a separate comment, once, that mentions the pull request's author and whoever merged it, names the
+  branch and the tests and flows master moved past, and says to merge it by hand in mabl. Until then master's tests
+  lack the pull request's test changes, and the failed step and the edited report comment alone went unnoticed.
+
 ## 1.1.0
 
 - **A comment with text after the trigger word is now a stage request.** The action sends one `stage.requested`

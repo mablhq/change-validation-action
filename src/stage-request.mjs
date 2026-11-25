@@ -1289,15 +1289,18 @@ async function sendStage({env, fetchImpl, sleep, now = Date.now, print, signalAf
     const what = body.event.kind === MERGED_EVENT_KIND ? 'merged' : `stage ${body.event.stage}${body.event.command ? " with the comment's request" : ''}`;
     report('notice', `${what}: ${result.event}${result.agent ? `, agent ${result.agent}` : ''} (${result.session_id})`);
     let exitCode = 0;
+    let unmerged = [];
     // A superseded merged event is another merge commit's, so its branch isn't this one's to report.
     if (merged && TAKEN.has(result.event)) {
       const branchReport = mergeOutcome(result.landed, {recorded: result.event === 'duplicate'});
       branchReport.annotations.forEach(({level, message}) => report(level, message));
       branchReport.log.forEach((line) => print(redact(escapeInvisible(line))));
       exitCode = branchReport.failed ? 1 : 0;
+      unmerged = branchReport.unmerged;
     }
     return finish(String(result.event ?? ''), exitCode, {
       ...described,
+      ...(unmerged.length > 0 ? {'unmerged-branches': JSON.stringify(unmerged)} : {}),
       'session-id': String(result.session_id ?? ''),
       created: String(result.created === true),
       agent: String(result.agent ?? ''),

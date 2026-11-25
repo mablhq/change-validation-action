@@ -63,23 +63,32 @@ function levelOf(outcome) {
 
 // What to report for `landed`: one annotation per branch (a single warning if `landed` is missing or malformed), an
 // error for an outcome someone has to act on, and a log line per test or flow a diverged branch names.
-// `failed` says whether any outcome fails the step.
+// `failed` says whether any outcome fails the step, and `unmerged` lists those branches for the pull request's notice.
 // `recorded` is a repeat's answer, which reports the outcome recorded the first time.
 export function mergeOutcome(landed, {recorded = false} = {}) {
   if (!isObject(landed) || !Array.isArray(landed.branches)) {
-    return {annotations: [{level: 'warning', message: "mabl's answer doesn't say what became of the pull request's mabl branch, so check it in mabl"}], log: [], failed: false};
+    return {annotations: [{level: 'warning', message: "mabl's answer doesn't say what became of the pull request's mabl branch, so check it in mabl"}], log: [], failed: false, unmerged: []};
   }
   const branches = landed.branches.filter(isObject);
   if (branches.length === 0) {
-    return {annotations: [{level: 'notice', message: "no mabl branch to merge: the pull request's tests didn't run on one"}], log: [], failed: false};
+    return {annotations: [{level: 'notice', message: "no mabl branch to merge: the pull request's tests didn't run on one"}], log: [], failed: false, unmerged: []};
   }
   const annotations = [];
   const log = [];
+  const unmerged = [];
   for (const branch of branches) {
     const fullName = shorten(oneLine(branch.name) || 'unnamed', MAX_LOGGED_NAME);
     const outcome = oneLine(branch.outcome);
     const entities = outcome === 'diverged' && Array.isArray(branch.diverged_entities) ? branch.diverged_entities.filter(isObject) : [];
     annotations.push({level: levelOf(outcome), message: branchMessage(shorten(fullName, MAX_BRANCH_NAME), outcome, entities, recorded)});
+    if (FAILING_OUTCOMES.has(outcome)) {
+      unmerged.push({
+        name: shorten(fullName, MAX_BRANCH_NAME),
+        outcome,
+        entities: entities.slice(0, MAX_NAMED).map((entity) => ({type: oneLine(entity.type), name: shorten(oneLine(entity.name) || oneLine(entity.id), MAX_ANNOTATION_NAME)})),
+        more: Math.max(0, entities.length - MAX_NAMED),
+      });
+    }
     for (const entity of entities.slice(0, MAX_LOGGED)) {
       log.push(`mabl branch ${fullName}: master moved past ${entityOf(entity, MAX_LOGGED_NAME)} (${shorten(oneLine(entity.id), MAX_LOGGED_NAME)})`);
     }
@@ -87,5 +96,5 @@ export function mergeOutcome(landed, {recorded = false} = {}) {
       log.push(`mabl branch ${fullName}: and ${entities.length - MAX_LOGGED} more`);
     }
   }
-  return {annotations, log, failed: annotations.some((each) => each.level === 'error')};
+  return {annotations, log, failed: annotations.some((each) => each.level === 'error'), unmerged};
 }
