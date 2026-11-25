@@ -72,10 +72,11 @@ const prEvent = (action, extra = {}) => ({
   ...extra,
 });
 
+const COMMENTED_AT = '2026-11-04T12:05:00Z';
 const commentEvent = (association, extra = {}) => ({
   action: 'created',
   issue: {number: 7, pull_request: {url: 'x'}},
-  comment: {author_association: association, body: '/mabl author 2', user: {login: 'dev'}},
+  comment: {created_at: COMMENTED_AT, author_association: association, body: '/mabl author 2', user: {login: 'dev'}},
   ...extra,
 });
 
@@ -888,7 +889,7 @@ describe('a fork', () => {
     });
   }
 
-  it('is refused for a command too', async () => {
+  it("is refused for a comment's request too", async () => {
     const stubbed = stub({pr: pullRequest({head: {sha: HEAD, ref: 'f', repo: {id: 2002}}})});
     const {outputs} = await runWith('issue_comment', commentEvent('MEMBER'), stubbed, {...NO_KEY, CHANGE_VALIDATION_COMMAND: 'author 2'});
 
@@ -897,28 +898,90 @@ describe('a fork', () => {
   });
 });
 
-describe('a command', () => {
-  it("sends a trusted commenter's command keyed by the run, with no policy, stage or labels", async () => {
+describe("a comment's request", () => {
+  it("asks for the caller's stage at the current head with the commenter's text, timed at the comment", async () => {
     const stubbed = stub({mabl: [json(200, {session_id: 's1-as', created: false, event: 'accepted', agent: 'working'})]});
-    const {exitCode, outputs} = await runWith('issue_comment', commentEvent('COLLABORATOR'), stubbed, {
-      CHANGE_VALIDATION_COMMAND: ' author 2 ',
+    const {exitCode, outputs, lines} = await runWith('issue_comment', commentEvent('COLLABORATOR'), stubbed, {
+      CHANGE_VALIDATION_COMMAND: ' run it again, focusing on the checkout page ',
       CHANGE_VALIDATION_DRY_RUN: 'true',
     });
 
     assert.equal(exitCode, 0);
+    assert.equal(outputs.outcome, 'accepted');
     assert.equal(outputs.created, 'false');
-    assert.deepEqual(stubbed.sent(), [
-      {
-        workspace_id: 'ws-w',
-        reference: {type: 'pull_request', id: 'github.com/org/repo#7', url: 'https://github.com/Org/Repo/pull/7'},
-        event: {kind: 'command', command: 'author 2'},
-        idempotency_key: '555-2',
-      },
-    ]);
-    assert.equal(stubbed.calls.some((call) => call.url.pathname.includes('/contents/')), false);
-    assert.equal(outputs['description-source'], '');
-    assert.equal(stubbed.fileCalls().length, 0);
+    assert.equal(outputs['description-source'], 'built');
+    assert.equal(outputs['pull-request-number'], '7');
+    const [body, ...more] = stubbed.sent();
+    assert.deepEqual(more, []);
+    assert.deepEqual(body.event, {
+      kind: 'stage.requested',
+      stage: 'pull_request',
+      head_sha: HEAD,
+      base_sha: BASE,
+      head_ref: 'feature/thing',
+      occurred_at: Date.parse(COMMENTED_AT),
+      labels: LABELS,
+      changed_paths: PATHS,
+      changed_paths_truncated: false,
+      pull_request_head_sha: HEAD,
+      command: 'run it again, focusing on the checkout page',
+    });
+    assert.equal('idempotency_key' in body, false);
+    assert.equal(body.dry_run, true);
+    assert.equal(body.change_description, BUILT);
+    assert.equal(body.related_artifacts[0].artifact_data.value.text, POLICY);
+    assert.ok(lines.some((line) => line.startsWith('::notice') && line.includes("stage pull_request with the comment's request: accepted")));
   });
+
+  it('keeps the same time on a retry and on a re-run of the job', async () => {
+    const retried = stub({mabl: [json(503, {error_code: 'agent_stopping'}), ACCEPTED]});
+    await runWith('issue_comment', commentEvent('MEMBER'), retried, {CHANGE_VALIDATION_COMMAND: 're-run this'});
+    const rerun = stub();
+    await runWith('issue_comment', commentEvent('MEMBER'), rerun, {CHANGE_VALIDATION_COMMAND: 're-run this', GITHUB_RUN_ATTEMPT: '3'});
+
+    const bodies = [...retried.sent(), ...rerun.sent()];
+    assert.equal(bodies.length, 3);
+    assert.deepEqual(new Set(bodies.map((body) => body.event.occurred_at)), new Set([Date.parse(COMMENTED_AT)]));
+  });
+
+  it('needs a stage, as any stage request does', async () => {
+    const stubbed = stub();
+    const {exitCode, lines} = await runWith('issue_comment', commentEvent('MEMBER'), stubbed, {
+      CHANGE_VALIDATION_COMMAND: 'author 2',
+      CHANGE_VALIDATION_STAGE: '',
+    });
+
+    assert.equal(exitCode, 1);
+    assert.equal(stubbed.mablCalls().length, 0);
+    assert.match(lines.join('\n'), /stage is required/);
+  });
+
+  it('takes 2,000 characters, and fails, sending nothing, on more', async () => {
+    const taken = stub();
+    await runWith('issue_comment', commentEvent('MEMBER'), taken, {CHANGE_VALIDATION_COMMAND: 'x'.repeat(2_000)});
+    assert.equal(taken.sent()[0].event.command.length, 2_000);
+
+    const stubbed = stub();
+    const {exitCode, outputs, lines} = await runWith('issue_comment', commentEvent('MEMBER'), stubbed, {CHANGE_VALIDATION_COMMAND: 'x'.repeat(2_001)});
+    assert.equal(exitCode, 1);
+    assert.equal(outputs.outcome, 'failed');
+    assert.equal(stubbed.mablCalls().length, 0);
+    assert.match(lines.join('\n'), /the request after the trigger word is 2001 characters, over the 2000 mabl takes/);
+  });
+
+  for (const [label, comment] of [
+    ['no creation time', {created_at: undefined}],
+    ['a creation time that is not one', {created_at: 'yesterday'}],
+  ]) {
+    it(`fails, sending nothing, when the comment has ${label}`, async () => {
+      const stubbed = stub();
+      const payload = commentEvent('MEMBER');
+      const {exitCode} = await runWith('issue_comment', {...payload, comment: {...payload.comment, ...comment}}, stubbed, {CHANGE_VALIDATION_COMMAND: 'author 2'});
+
+      assert.equal(exitCode, 1);
+      assert.equal(stubbed.mablCalls().length, 0);
+    });
+  }
 
   for (const [label, permission] of [
     ['read access only', json(200, {permission: 'read'})],
@@ -936,17 +999,6 @@ describe('a command', () => {
       assert.equal(stubbed.mablCalls().length, 0);
     });
   }
-
-  it('needs no stage', async () => {
-    const stubbed = stub();
-    const {exitCode} = await runWith('issue_comment', commentEvent('MEMBER'), stubbed, {
-      CHANGE_VALIDATION_COMMAND: 'author 2',
-      CHANGE_VALIDATION_STAGE: '',
-    });
-
-    assert.equal(exitCode, 0);
-    assert.equal(stubbed.sent()[0].event.kind, 'command');
-  });
 
   it('fails, sending nothing, when the permission read fails', async () => {
     const stubbed = stub({permission: json(500, {message: 'boom'})});
@@ -1018,6 +1070,7 @@ describe('the trigger word alone', () => {
       });
       assert.equal(body.related_artifacts[0].artifact_data.value.text, POLICY);
       assert.equal(body.idempotency_key, undefined);
+      assert.equal('command' in body.event, false);
     });
   }
 
@@ -1042,14 +1095,18 @@ describe('the trigger word alone', () => {
 
 describe('the trigger-word input', () => {
   const WORD = {CHANGE_VALIDATION_TRIGGER_WORD: '/mabl', CHANGE_VALIDATION_COMMAND: 'not this'};
-  const commentOf = (body, association = 'MEMBER') => commentEvent(association, {comment: {author_association: association, body, user: {login: 'dev'}}});
+  const commentOf = (body, association = 'MEMBER') => {
+    const payload = commentEvent(association);
+    return {...payload, comment: {...payload.comment, body}};
+  };
 
-  it("sends the rest of the comment's first line as the command, not the command input", async () => {
+  it("sends the rest of the comment's first line as the request, not the command input", async () => {
     const stubbed = stub();
     const {exitCode} = await runWith('issue_comment', commentOf('/mabl  author 2 \r\nand a second line'), stubbed, WORD);
 
     assert.equal(exitCode, 0);
-    assert.deepEqual(stubbed.sent()[0].event, {kind: 'command', command: 'author 2'});
+    assert.equal(stubbed.sent()[0].event.kind, 'stage.requested');
+    assert.equal(stubbed.sent()[0].event.command, 'author 2');
   });
 
   for (const body of ['/mabl', '/mabl ', '/mabl\nplease']) {
@@ -1060,6 +1117,8 @@ describe('the trigger-word input', () => {
       assert.equal(exitCode, 0);
       assert.equal(stubbed.sent()[0].event.kind, 'stage.requested');
       assert.equal(stubbed.sent()[0].event.head_sha, HEAD);
+      assert.equal('command' in stubbed.sent()[0].event, false);
+      assert.equal('idempotency_key' in stubbed.sent()[0], false);
     });
   }
 
@@ -1740,12 +1799,21 @@ describe('expected-head-sha', () => {
     assert.equal(stubbed.mablCalls().length, 0);
   });
 
-  it('is ignored by a command and by a merged pull request', async () => {
-    const command = stub({pr: movedTo(NEW_HEAD), mabl: [json(200, {session_id: 's1-as', created: false, event: 'accepted', agent: 'working'})]});
-    const sent = await runWith('issue_comment', commentEvent('MEMBER'), command, {CHANGE_VALIDATION_COMMAND: 'look again', CHANGE_VALIDATION_EXPECTED_HEAD_SHA: HEAD});
-    assert.equal(sent.outputs.outcome, 'accepted');
-    assert.equal(command.sent()[0].event.kind, 'command');
+  it("applies to a comment's request", async () => {
+    const moved = stub({pr: movedTo(NEW_HEAD)});
+    const skipped = await runWith('issue_comment', commentEvent('MEMBER'), moved, {CHANGE_VALIDATION_COMMAND: 'look again', CHANGE_VALIDATION_EXPECTED_HEAD_SHA: HEAD});
+    assert.equal(skipped.exitCode, 0);
+    assert.equal(skipped.outputs.outcome, 'skipped');
+    assert.equal(moved.mablCalls().length, 0);
+    assert.ok(skipped.lines.some((line) => line.startsWith('::notice') && line.includes(`head is ${NEW_HEAD}, not the expected ${HEAD}`)));
 
+    const atHead = stub();
+    const sent = await runWith('issue_comment', commentEvent('MEMBER'), atHead, {CHANGE_VALIDATION_COMMAND: 'look again', CHANGE_VALIDATION_EXPECTED_HEAD_SHA: HEAD});
+    assert.equal(sent.outputs.outcome, 'accepted');
+    assert.equal(atHead.sent()[0].event.command, 'look again');
+  });
+
+  it('is ignored by a merged pull request', async () => {
     const merged = stub({mabl: [json(200, {session_id: 's1-as', created: false, event: 'accepted', agent: 'working'})]});
     const told = await runWith('pull_request', closedEvent(), merged, {CHANGE_VALIDATION_STAGE: '', CHANGE_VALIDATION_EXPECTED_HEAD_SHA: NEW_HEAD});
     assert.equal(told.outputs.outcome, 'accepted');
@@ -1754,7 +1822,7 @@ describe('expected-head-sha', () => {
   for (const [label, eventName, payload, env] of [
     ['a stage request', 'pull_request', prEvent('opened'), {}],
     ['a merge queue entry', 'merge_group', {action: 'checks_requested'}, {CHANGE_VALIDATION_STAGE: 'merge_queue'}],
-    ['a command', 'issue_comment', commentEvent('MEMBER'), {CHANGE_VALIDATION_COMMAND: 'look again'}],
+    ["a comment's request", 'issue_comment', commentEvent('MEMBER'), {CHANGE_VALIDATION_COMMAND: 'look again'}],
     ['a merged pull request', 'pull_request', closedEvent(), {CHANGE_VALIDATION_STAGE: ''}],
     ['an action not sent', 'pull_request', prEvent('labeled'), {}],
     ["send: 'false'", 'pull_request', prEvent('synchronize', {pull_request: pullRequest()}), {CHANGE_VALIDATION_SEND: 'false', CHANGE_VALIDATION_COMMENT: 'true'}],
@@ -1800,6 +1868,7 @@ describe('require-expected-head', () => {
   for (const [label, eventName, payload, env] of [
     ['a pull request', 'pull_request', prEvent('synchronize'), {}],
     ['the trigger word alone', 'issue_comment', commentEvent('MEMBER'), {CHANGE_VALIDATION_COMMAND: ''}],
+    ["a comment's request", 'issue_comment', commentEvent('MEMBER'), {CHANGE_VALIDATION_COMMAND: 'look again'}],
   ]) {
     for (const value of ['', '   ']) {
       it(`fails, calling nothing, on ${label} when expected-head-sha is ${JSON.stringify(value)}`, async () => {
@@ -1829,11 +1898,7 @@ describe('require-expected-head', () => {
     }
   });
 
-  it('does not apply to a command or a merged pull request', async () => {
-    const command = stub({mabl: [json(200, {session_id: 's1-as', created: false, event: 'accepted', agent: 'working'})]});
-    const sent = await runWith('issue_comment', commentEvent('MEMBER'), command, {...REQUIRE, CHANGE_VALIDATION_COMMAND: 'look again'});
-    assert.equal(sent.outputs.outcome, 'accepted');
-
+  it('does not apply to a merged pull request', async () => {
     const merged = stub({mabl: [json(200, {session_id: 's1-as', created: false, event: 'accepted', agent: 'working'})]});
     const told = await runWith('pull_request', closedEvent(), merged, {...REQUIRE, CHANGE_VALIDATION_STAGE: ''});
     assert.equal(told.outputs.outcome, 'accepted');

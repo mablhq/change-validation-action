@@ -1,6 +1,6 @@
 {
   "name": "change-validation-action",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "private": true,
   "description": "GitHub Action and reusable workflows for mabl change validation",
   "license": "MIT",

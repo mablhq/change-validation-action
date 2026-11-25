@@ -1,8 +1,8 @@
 name: mabl change validation (pull request)
 
 # Asks mabl to validate a pull request stage when a pull request opens or gets a new commit, and when someone
-# with write access comments the trigger word on it: the word alone sends the current head, and anything after
-# it is sent to the pull request's mabl agent as a command.
+# with write access comments the trigger word on it: the word sends the current head, and anything after it goes
+# with that request to the pull request's mabl agent.
 #
 # With `comment: true` it also keeps one comment on the pull request with mabl's report of the change, for up to
 # comment-wait-minutes after the stage request.
@@ -35,7 +35,7 @@ on:
         type: string
         default: https://api.mabl.com
       trigger-word:
-        description: The comment word that sends the current head, or a command after it
+        description: The comment word that sends the current head, with any request typed after it
         type: string
         default: /mabl
       comment:
@@ -76,7 +76,7 @@ jobs:
         startsWith(github.event.comment.body, format('{0} ', inputs.trigger-word))) &&
        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
     # pull_request runs share one group per pull request and stage, so a newer push replaces the older run's
-    # wait for the comment; every other run gets its own, so a comment command can't cancel a pending push's run.
+    # wait for the comment; every other run gets its own, so a comment can't cancel a pending push's run.
     concurrency:
       group: ${{ github.event_name == 'pull_request' && format('mabl-change-validation-{0}-pr-{1}', inputs.stage, github.event.pull_request.number) || format('mabl-change-validation-run-{0}', github.run_id) }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
